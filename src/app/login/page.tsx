@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ShieldCheck, KeyRound, Lock, User, ArrowRight, AlertCircle } from 'lucide-react';
+import { Lock, User, ArrowRight, AlertCircle, Music } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -46,37 +46,34 @@ export default function LoginPage() {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      padding: '2rem 1.5rem',
-      position: 'relative',
-      zIndex: 1,
+      padding: '1.5rem',
+      backgroundColor: '#000000',
     }}>
-      <div className="glass-panel animate-fade-in" style={{
+      <div className="apple-glass" style={{
         width: '100%',
-        maxWidth: '420px',
+        maxWidth: '400px',
         padding: '2.5rem 2rem',
-        border: '1px solid rgba(255, 255, 255, 0.08)',
       }}>
-        {/* Camouflage Security Header */}
+        {/* Apple Music Header */}
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
           <div style={{
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: '3.5rem',
-            height: '3.5rem',
-            borderRadius: '1rem',
-            background: 'linear-gradient(135deg, rgba(6, 182, 212, 0.15) 0%, rgba(99, 102, 241, 0.15) 100%)',
-            border: '1px solid rgba(6, 182, 212, 0.3)',
-            marginBottom: '1rem',
-            color: 'var(--accent-cyan)',
+            width: '4rem',
+            height: '4rem',
+            borderRadius: '1.25rem',
+            background: 'var(--apple-gradient)',
+            marginBottom: '1.25rem',
+            boxShadow: '0 8px 24px var(--apple-pink-glow)',
           }}>
-            <ShieldCheck size={28} />
+            <Music size={32} fill="#ffffff" color="#ffffff" />
           </div>
-          <h1 style={{ fontSize: '1.5rem', marginBottom: '0.4rem', letterSpacing: '-0.02em' }}>
-            Vault Portal
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 800, letterSpacing: '-0.03em', marginBottom: '0.25rem' }}>
+            Vault Music
           </h1>
-          <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-            Encrypted Workspace • Node 01
+          <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+            Sign in with your Apple-styled credentials
           </p>
         </div>
 
@@ -87,9 +84,9 @@ export default function LoginPage() {
             gap: '0.6rem',
             padding: '0.75rem 1rem',
             borderRadius: 'var(--radius-md)',
-            background: 'rgba(244, 63, 94, 0.1)',
-            border: '1px solid rgba(244, 63, 94, 0.25)',
-            color: '#fda4af',
+            background: 'rgba(250, 36, 60, 0.12)',
+            border: '1px solid rgba(250, 36, 60, 0.25)',
+            color: '#ff6b81',
             fontSize: '0.8125rem',
             marginBottom: '1.25rem',
           }}>
@@ -99,16 +96,16 @@ export default function LoginPage() {
         )}
 
         <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label className="form-label" htmlFor="identifier">
-              <span>Account Identifier</span>
+          <div style={{ marginBottom: '1.2rem' }}>
+            <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.4rem' }}>
+              Username or Email
             </label>
             <div style={{ position: 'relative' }}>
               <input
                 id="identifier"
                 type="text"
-                className="form-input"
-                placeholder="Username or Email"
+                className="apple-search-input"
+                placeholder="Username or email"
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 required
@@ -121,21 +118,21 @@ export default function LoginPage() {
                   left: '0.85rem',
                   top: '50%',
                   transform: 'translateY(-50%)',
-                  color: 'var(--text-muted)',
+                  color: 'var(--text-tertiary)',
                 }}
               />
             </div>
           </div>
 
-          <div className="form-group" style={{ marginBottom: '1.75rem' }}>
-            <label className="form-label" htmlFor="password">
-              <span>Access Key</span>
+          <div style={{ marginBottom: '1.75rem' }}>
+            <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.4rem' }}>
+              Password
             </label>
             <div style={{ position: 'relative' }}>
               <input
                 id="password"
                 type="password"
-                className="form-input"
+                className="apple-search-input"
                 placeholder="••••••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -149,7 +146,7 @@ export default function LoginPage() {
                   left: '0.85rem',
                   top: '50%',
                   transform: 'translateY(-50%)',
-                  color: 'var(--text-muted)',
+                  color: 'var(--text-tertiary)',
                 }}
               />
             </div>
@@ -157,15 +154,15 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            className="btn btn-primary"
+            className="btn-apple-primary"
             disabled={loading}
-            style={{ width: '100%', padding: '0.85rem 1rem', fontSize: '0.9375rem' }}
+            style={{ width: '100%', padding: '0.85rem 1rem', fontSize: '0.9375rem', justifyContent: 'center' }}
           >
             {loading ? (
-              'Verifying Session...'
+              'Verifying...'
             ) : (
               <>
-                <span>Authenticate Session</span>
+                <span>Sign In</span>
                 <ArrowRight size={16} />
               </>
             )}
@@ -175,21 +172,21 @@ export default function LoginPage() {
         <div style={{
           marginTop: '1.75rem',
           paddingTop: '1.25rem',
-          borderTop: '1px solid var(--border-dim)',
+          borderTop: '1px solid var(--border-hairline)',
           textAlign: 'center',
           fontSize: '0.8125rem',
-          color: 'var(--text-muted)',
+          color: 'var(--text-tertiary)',
         }}>
-          Need access credentials?{' '}
+          Don&apos;t have an account?{' '}
           <Link
             href="/register"
             style={{
-              color: 'var(--accent-cyan)',
+              color: 'var(--apple-pink)',
               textDecoration: 'none',
               fontWeight: 600,
             }}
           >
-            Register Account
+            Create Account
           </Link>
         </div>
       </div>

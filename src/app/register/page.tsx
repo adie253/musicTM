@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ShieldCheck, User, Mail, Lock, ArrowRight, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { User, Mail, Lock, ArrowRight, AlertCircle, Music } from 'lucide-react';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -34,7 +34,7 @@ export default function RegisterPage() {
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data.error || 'Failed to register account.');
+        setError(data.error || 'Failed to create account.');
         setLoading(false);
         return;
       }
@@ -53,36 +53,33 @@ export default function RegisterPage() {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      padding: '2rem 1.5rem',
-      position: 'relative',
-      zIndex: 1,
+      padding: '1.5rem',
+      backgroundColor: '#000000',
     }}>
-      <div className="glass-panel animate-fade-in" style={{
+      <div className="apple-glass" style={{
         width: '100%',
-        maxWidth: '440px',
+        maxWidth: '420px',
         padding: '2.5rem 2rem',
-        border: '1px solid rgba(255, 255, 255, 0.08)',
       }}>
         <div style={{ textAlign: 'center', marginBottom: '1.75rem' }}>
           <div style={{
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: '3.5rem',
-            height: '3.5rem',
-            borderRadius: '1rem',
-            background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(6, 182, 212, 0.15) 100%)',
-            border: '1px solid rgba(16, 185, 129, 0.3)',
-            marginBottom: '1rem',
-            color: 'var(--accent-emerald)',
+            width: '4rem',
+            height: '4rem',
+            borderRadius: '1.25rem',
+            background: 'var(--apple-gradient)',
+            marginBottom: '1.25rem',
+            boxShadow: '0 8px 24px var(--apple-pink-glow)',
           }}>
-            <ShieldCheck size={28} />
+            <Music size={32} fill="#ffffff" color="#ffffff" />
           </div>
-          <h1 style={{ fontSize: '1.5rem', marginBottom: '0.4rem', letterSpacing: '-0.02em' }}>
-            New Vault Identity
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 800, letterSpacing: '-0.03em', marginBottom: '0.25rem' }}>
+            Join Vault Music
           </h1>
-          <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-            Provision a private encrypted storage profile
+          <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+            Stream, curate, and upload your personal library
           </p>
         </div>
 
@@ -93,9 +90,9 @@ export default function RegisterPage() {
             gap: '0.6rem',
             padding: '0.75rem 1rem',
             borderRadius: 'var(--radius-md)',
-            background: 'rgba(244, 63, 94, 0.1)',
-            border: '1px solid rgba(244, 63, 94, 0.25)',
-            color: '#fda4af',
+            background: 'rgba(250, 36, 60, 0.12)',
+            border: '1px solid rgba(250, 36, 60, 0.25)',
+            color: '#ff6b81',
             fontSize: '0.8125rem',
             marginBottom: '1.25rem',
           }}>
@@ -105,16 +102,16 @@ export default function RegisterPage() {
         )}
 
         <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label className="form-label" htmlFor="username">
-              <span>Username Handle</span>
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.4rem' }}>
+              Username
             </label>
             <div style={{ position: 'relative' }}>
               <input
                 id="username"
                 type="text"
-                className="form-input"
-                placeholder="e.g. aditya"
+                className="apple-search-input"
+                placeholder="aditya"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
@@ -128,22 +125,22 @@ export default function RegisterPage() {
                   left: '0.85rem',
                   top: '50%',
                   transform: 'translateY(-50%)',
-                  color: 'var(--text-muted)',
+                  color: 'var(--text-tertiary)',
                 }}
               />
             </div>
           </div>
 
-          <div className="form-group">
-            <label className="form-label" htmlFor="email">
-              <span>Account Email</span>
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.4rem' }}>
+              Email Address
             </label>
             <div style={{ position: 'relative' }}>
               <input
                 id="email"
                 type="email"
-                className="form-input"
-                placeholder="name@domain.com"
+                className="apple-search-input"
+                placeholder="name@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -156,35 +153,36 @@ export default function RegisterPage() {
                   left: '0.85rem',
                   top: '50%',
                   transform: 'translateY(-50%)',
-                  color: 'var(--text-muted)',
+                  color: 'var(--text-tertiary)',
                 }}
               />
             </div>
           </div>
 
-          <div className="form-group">
-            <label className="form-label" htmlFor="displayName">
-              <span>Display Alias (Optional)</span>
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.4rem' }}>
+              Display Name (Optional)
             </label>
             <input
               id="displayName"
               type="text"
-              className="form-input"
+              className="apple-search-input"
               placeholder="Aditya"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
+              style={{ paddingLeft: '1rem' }}
             />
           </div>
 
-          <div className="form-group" style={{ marginBottom: '1.75rem' }}>
-            <label className="form-label" htmlFor="password">
-              <span>Access Password</span>
+          <div style={{ marginBottom: '1.75rem' }}>
+            <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.4rem' }}>
+              Password
             </label>
             <div style={{ position: 'relative' }}>
               <input
                 id="password"
                 type="password"
-                className="form-input"
+                className="apple-search-input"
                 placeholder="Minimum 6 characters"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -199,7 +197,7 @@ export default function RegisterPage() {
                   left: '0.85rem',
                   top: '50%',
                   transform: 'translateY(-50%)',
-                  color: 'var(--text-muted)',
+                  color: 'var(--text-tertiary)',
                 }}
               />
             </div>
@@ -207,15 +205,15 @@ export default function RegisterPage() {
 
           <button
             type="submit"
-            className="btn btn-primary"
+            className="btn-apple-primary"
             disabled={loading}
-            style={{ width: '100%', padding: '0.85rem 1rem', fontSize: '0.9375rem' }}
+            style={{ width: '100%', padding: '0.85rem 1rem', fontSize: '0.9375rem', justifyContent: 'center' }}
           >
             {loading ? (
-              'Creating Identity...'
+              'Creating Account...'
             ) : (
               <>
-                <span>Provision Identity</span>
+                <span>Create Apple Music ID</span>
                 <ArrowRight size={16} />
               </>
             )}
@@ -225,16 +223,16 @@ export default function RegisterPage() {
         <div style={{
           marginTop: '1.75rem',
           paddingTop: '1.25rem',
-          borderTop: '1px solid var(--border-dim)',
+          borderTop: '1px solid var(--border-hairline)',
           textAlign: 'center',
           fontSize: '0.8125rem',
-          color: 'var(--text-muted)',
+          color: 'var(--text-tertiary)',
         }}>
-          Already have an authorized key?{' '}
+          Already have an account?{' '}
           <Link
             href="/login"
             style={{
-              color: 'var(--accent-cyan)',
+              color: 'var(--apple-pink)',
               textDecoration: 'none',
               fontWeight: 600,
             }}

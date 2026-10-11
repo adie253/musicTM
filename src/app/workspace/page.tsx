@@ -3,15 +3,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  ShieldCheck,
-  LogOut,
-  Upload,
   Play,
   Pause,
   SkipBack,
   SkipForward,
   Volume2,
   VolumeX,
+  Volume1,
   Plus,
   Trash2,
   Music,
@@ -19,10 +17,18 @@ import {
   Globe,
   Lock,
   Search,
+  Upload,
+  LogOut,
+  ChevronDown,
+  Repeat,
+  Shuffle,
+  MoreHorizontal,
+  Compass,
+  ListMusic,
+  User,
   CheckCircle2,
   AlertCircle,
-  HardDrive,
-  RefreshCw,
+  Radio,
 } from 'lucide-react';
 
 interface Track {
@@ -48,11 +54,30 @@ interface Playlist {
   createdAt: number;
 }
 
+const ARTWORK_GRADIENTS = [
+  'linear-gradient(135deg, #fa243c 0%, #ff5b79 100%)',
+  'linear-gradient(135deg, #6236ff 0%, #fa243c 100%)',
+  'linear-gradient(135deg, #00c6ff 0%, #0072ff 100%)',
+  'linear-gradient(135deg, #f857a6 0%, #ff5858 100%)',
+  'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
+  'linear-gradient(135deg, #f12711 0%, #f5af19 100%)',
+  'linear-gradient(135deg, #8a2387 0%, #e94057 50%, #f27121 100%)',
+];
+
+function getTrackGradient(id: string) {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = id.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const index = Math.abs(hash) % ARTWORK_GRADIENTS.length;
+  return ARTWORK_GRADIENTS[index];
+}
+
 export default function WorkspacePage() {
   const router = useRouter();
   const [user, setUser] = useState<{ id: string; username: string; email: string; displayName?: string } | null>(null);
-  const [activeTab, setActiveTab] = useState<'tracks' | 'playlists' | 'upload'>('tracks');
-  
+  const [activeTab, setActiveTab] = useState<'listen' | 'tracks' | 'playlists' | 'upload'>('listen');
+
   // Data states
   const [tracks, setTracks] = useState<Track[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
@@ -66,6 +91,10 @@ export default function WorkspacePage() {
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.85);
   const [isMuted, setIsMuted] = useState(false);
+  const [isLooping, setIsLooping] = useState(false);
+  const [isShuffle, setIsShuffle] = useState(false);
+  const [isExpandedPlayer, setIsExpandedPlayer] = useState(false);
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Upload state
@@ -73,20 +102,18 @@ export default function WorkspacePage() {
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  // Playlist modal state
+  // Playlist state
   const [showNewPlaylistModal, setShowNewPlaylistModal] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [newPlaylistDesc, setNewPlaylistDesc] = useState('');
   const [newPlaylistVisibility, setNewPlaylistVisibility] = useState<'private' | 'public'>('private');
   const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
   const [playlistTracks, setPlaylistTracks] = useState<Track[]>([]);
-
-  // Add to playlist modal
   const [trackToAddToPlaylist, setTrackToAddToPlaylist] = useState<Track | null>(null);
 
-  // Fetch user session and initial data
+  // Fetch session & initial data
   useEffect(() => {
-    async function loadSessionAndData() {
+    async function loadData() {
       try {
         const userRes = await fetch('/api/auth/me');
         if (!userRes.ok) {
@@ -103,7 +130,7 @@ export default function WorkspacePage() {
         setLoading(false);
       }
     }
-    loadSessionAndData();
+    loadData();
   }, [router]);
 
   async function loadTracks() {
@@ -136,7 +163,7 @@ export default function WorkspacePage() {
     router.refresh();
   }
 
-  // Audio Playback handlers
+  // Audio Playback
   function playTrack(track: Track) {
     if (currentTrack?.id === track.id) {
       if (isPlaying) {
@@ -156,11 +183,12 @@ export default function WorkspacePage() {
     if (audioRef.current) {
       audioRef.current.src = `/api/tracks/${track.id}/stream`;
       audioRef.current.load();
-      audioRef.current.play().catch((err) => console.warn('Autoplay error:', err));
+      audioRef.current.play().catch((err) => console.warn('Playback error:', err));
     }
   }
 
-  function togglePlay() {
+  function togglePlay(e?: React.MouseEvent) {
+    e?.stopPropagation();
     if (!audioRef.current || !currentTrack) return;
     if (isPlaying) {
       audioRef.current.pause();
@@ -208,14 +236,21 @@ export default function WorkspacePage() {
     }
   }
 
-  function playNextTrack() {
+  function playNextTrack(e?: React.MouseEvent) {
+    e?.stopPropagation();
     if (!currentTrack || tracks.length === 0) return;
+    if (isShuffle) {
+      const randomIndex = Math.floor(Math.random() * tracks.length);
+      playTrack(tracks[randomIndex]);
+      return;
+    }
     const currentIndex = tracks.findIndex((t) => t.id === currentTrack.id);
     const nextIndex = (currentIndex + 1) % tracks.length;
     playTrack(tracks[nextIndex]);
   }
 
-  function playPrevTrack() {
+  function playPrevTrack(e?: React.MouseEvent) {
+    e?.stopPropagation();
     if (!currentTrack || tracks.length === 0) return;
     const currentIndex = tracks.findIndex((t) => t.id === currentTrack.id);
     const prevIndex = (currentIndex - 1 + tracks.length) % tracks.length;
@@ -241,39 +276,21 @@ export default function WorkspacePage() {
 
       const data = await res.json();
       if (!res.ok) {
-        setUploadStatus({ type: 'error', message: data.error || 'Upload rejected' });
+        setUploadStatus({ type: 'error', message: data.error || 'Upload failed' });
       } else {
-        setUploadStatus({ type: 'success', message: `Encrypted audio stored: "${data.track.title}"` });
+        setUploadStatus({ type: 'success', message: `Added to Library: "${data.track.title}"` });
         setUploadFile(null);
         await loadTracks();
         setActiveTab('tracks');
       }
     } catch {
-      setUploadStatus({ type: 'error', message: 'Network transmission failure' });
+      setUploadStatus({ type: 'error', message: 'Network connection failed' });
     } finally {
       setUploading(false);
     }
   }
 
-  // Delete track
-  async function handleDeleteTrack(trackId: string) {
-    if (!confirm('Are you sure you want to permanently delete this track?')) return;
-    try {
-      const res = await fetch(`/api/tracks?id=${trackId}`, { method: 'DELETE' });
-      if (res.ok) {
-        if (currentTrack?.id === trackId) {
-          audioRef.current?.pause();
-          setCurrentTrack(null);
-          setIsPlaying(false);
-        }
-        await loadTracks();
-      }
-    } catch (err) {
-      console.error('Delete track error:', err);
-    }
-  }
-
-  // Create playlist
+  // Playlist handlers
   async function handleCreatePlaylist(e: React.FormEvent) {
     e.preventDefault();
     if (!newPlaylistName.trim()) return;
@@ -300,7 +317,6 @@ export default function WorkspacePage() {
     }
   }
 
-  // View playlist detail
   async function handleViewPlaylist(playlist: Playlist) {
     setSelectedPlaylist(playlist);
     try {
@@ -314,7 +330,6 @@ export default function WorkspacePage() {
     }
   }
 
-  // Add track to playlist
   async function handleAddTrackToPlaylist(playlistId: string) {
     if (!trackToAddToPlaylist) return;
     try {
@@ -328,23 +343,24 @@ export default function WorkspacePage() {
         await loadPlaylists();
       }
     } catch (err) {
-      console.error('Add to playlist error:', err);
+      console.error('Add track error:', err);
     }
   }
 
-  // Delete playlist
-  async function handleDeletePlaylist(playlistId: string) {
-    if (!confirm('Are you sure you want to delete this playlist?')) return;
+  async function handleDeleteTrack(trackId: string) {
+    if (!confirm('Are you sure you want to remove this song from your library?')) return;
     try {
-      const res = await fetch(`/api/playlists/${playlistId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/tracks?id=${trackId}`, { method: 'DELETE' });
       if (res.ok) {
-        if (selectedPlaylist?.id === playlistId) {
-          setSelectedPlaylist(null);
+        if (currentTrack?.id === trackId) {
+          audioRef.current?.pause();
+          setCurrentTrack(null);
+          setIsPlaying(false);
         }
-        await loadPlaylists();
+        await loadTracks();
       }
     } catch (err) {
-      console.error('Delete playlist error:', err);
+      console.error('Delete track error:', err);
     }
   }
 
@@ -358,469 +374,817 @@ export default function WorkspacePage() {
   const filteredTracks = tracks.filter(
     (t) =>
       t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      t.artist.toLowerCase().includes(searchQuery.toLowerCase())
+      t.artist.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (t.album && t.album.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
   return (
-    <div style={{ minHeight: '100vh', paddingBottom: currentTrack ? '7.5rem' : '2rem' }}>
-      {/* Hidden Native Audio Element */}
+    <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: '#000000', color: '#ffffff' }}>
+      {/* Audio Element */}
       <audio
         ref={audioRef}
+        loop={isLooping}
         onTimeUpdate={handleTimeUpdate}
-        onEnded={playNextTrack}
+        onEnded={() => {
+          if (!isLooping) playNextTrack();
+        }}
         onLoadedMetadata={handleTimeUpdate}
       />
 
-      {/* Camouflage Top Navigation Bar */}
-      <header style={{
-        background: 'rgba(10, 14, 22, 0.85)',
-        backdropFilter: 'blur(20px)',
-        borderBottom: '1px solid var(--border-dim)',
-        position: 'sticky',
-        top: 0,
-        zIndex: 40,
-      }}>
-        <div className="container" style={{
+      {/* DESKTOP SIDEBAR (macOS Apple Music Style) */}
+      <aside
+        className="desktop-only apple-sidebar"
+        style={{
+          width: '260px',
+          position: 'fixed',
+          top: 0,
+          bottom: currentTrack ? '90px' : 0,
+          left: 0,
+          zIndex: 30,
           display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          height: '4.25rem',
-        }}>
-          {/* Stealth Identity */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
-            <div style={{
-              width: '2.5rem',
-              height: '2.5rem',
-              borderRadius: '0.75rem',
-              background: 'linear-gradient(135deg, rgba(6, 182, 212, 0.2) 0%, rgba(99, 102, 241, 0.2) 100%)',
-              border: '1px solid rgba(6, 182, 212, 0.4)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--accent-cyan)',
-            }}>
-              <HardDrive size={20} />
-            </div>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span style={{ fontWeight: 700, fontSize: '1rem', letterSpacing: '-0.02em' }}>
-                  Aether Vault
-                </span>
-                <span className="badge badge-stealth" style={{ fontSize: '0.7rem' }}>
-                  NODE 01
-                </span>
-              </div>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Authenticated: {user?.username} ({user?.email})
-              </p>
-            </div>
-          </div>
-
-          {/* Search Bar */}
+          flexDirection: 'column',
+          padding: '1.75rem 1.25rem',
+        }}
+      >
+        {/* Apple Music Brand Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.75rem', paddingLeft: '0.5rem' }}>
           <div style={{
-            position: 'relative',
-            width: '320px',
+            width: '2.4rem',
+            height: '2.4rem',
+            borderRadius: '0.6rem',
+            background: 'var(--apple-gradient)',
             display: 'flex',
             alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 4px 14px var(--apple-pink-glow)',
           }}>
-            <Search
-              size={15}
-              style={{
-                position: 'absolute',
-                left: '0.85rem',
-                color: 'var(--text-muted)',
-              }}
-            />
-            <input
-              type="text"
-              className="form-input"
-              placeholder="Search encrypted media..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={{ paddingLeft: '2.4rem', height: '2.4rem', fontSize: '0.8125rem' }}
-            />
+            <Music size={18} fill="#ffffff" color="#ffffff" />
           </div>
-
-          {/* User Controls */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <button
-              onClick={handleLogout}
-              className="btn btn-secondary"
-              style={{ fontSize: '0.8125rem', padding: '0.5rem 0.85rem' }}
-            >
-              <LogOut size={15} />
-              <span>Lock Session</span>
-            </button>
+          <div>
+            <span style={{ fontWeight: 700, fontSize: '1.125rem', letterSpacing: '-0.02em' }}>Music</span>
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Vault Edition
+            </div>
           </div>
         </div>
-      </header>
 
-      {/* Main Workspace Body */}
-      <main className="container" style={{ marginTop: '2rem' }}>
-        {/* Navigation Tabs */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          borderBottom: '1px solid var(--border-dim)',
-          paddingBottom: '1rem',
-          marginBottom: '2rem',
-        }}>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
+        {/* Search Input */}
+        <div style={{ position: 'relative', marginBottom: '1.5rem' }}>
+          <Search size={15} style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }} />
+          <input
+            type="text"
+            className="apple-search-input"
+            placeholder="Search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+
+        {/* Navigation Categories */}
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-tertiary)', padding: '0 0.5rem 0.5rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            Apple Music
+          </div>
+          <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '1.5rem' }}>
+            <button
+              onClick={() => setActiveTab('listen')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                padding: '0.6rem 0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                background: activeTab === 'listen' ? 'rgba(250, 36, 60, 0.15)' : 'transparent',
+                color: activeTab === 'listen' ? 'var(--apple-pink)' : 'var(--text-white)',
+                border: 'none',
+                fontWeight: activeTab === 'listen' ? 600 : 500,
+                fontSize: '0.875rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              <Compass size={18} />
+              <span>Listen Now</span>
+            </button>
+
             <button
               onClick={() => setActiveTab('tracks')}
-              className={`btn ${activeTab === 'tracks' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ fontSize: '0.85rem' }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                padding: '0.6rem 0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                background: activeTab === 'tracks' ? 'rgba(250, 36, 60, 0.15)' : 'transparent',
+                color: activeTab === 'tracks' ? 'var(--apple-pink)' : 'var(--text-white)',
+                border: 'none',
+                fontWeight: activeTab === 'tracks' ? 600 : 500,
+                fontSize: '0.875rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
             >
-              <Music size={16} />
-              <span>Media Library ({tracks.length})</span>
+              <Music size={18} />
+              <span>Songs ({tracks.length})</span>
             </button>
 
             <button
               onClick={() => setActiveTab('playlists')}
-              className={`btn ${activeTab === 'playlists' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ fontSize: '0.85rem' }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                padding: '0.6rem 0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                background: activeTab === 'playlists' ? 'rgba(250, 36, 60, 0.15)' : 'transparent',
+                color: activeTab === 'playlists' ? 'var(--apple-pink)' : 'var(--text-white)',
+                border: 'none',
+                fontWeight: activeTab === 'playlists' ? 600 : 500,
+                fontSize: '0.875rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
             >
-              <FolderLock size={16} />
+              <ListMusic size={18} />
               <span>Playlists ({playlists.length})</span>
             </button>
 
             <button
               onClick={() => setActiveTab('upload')}
-              className={`btn ${activeTab === 'upload' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ fontSize: '0.85rem' }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                padding: '0.6rem 0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                background: activeTab === 'upload' ? 'rgba(250, 36, 60, 0.15)' : 'transparent',
+                color: activeTab === 'upload' ? 'var(--apple-pink)' : 'var(--text-white)',
+                border: 'none',
+                fontWeight: activeTab === 'upload' ? 600 : 500,
+                fontSize: '0.875rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
             >
-              <Upload size={16} />
-              <span>Upload Stream</span>
+              <Upload size={18} />
+              <span>Add Music</span>
             </button>
-          </div>
+          </nav>
 
-          {activeTab === 'playlists' && (
+          {/* Quick Playlists section */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 0.5rem 0.5rem' }}>
+            <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              My Playlists
+            </span>
             <button
               onClick={() => setShowNewPlaylistModal(true)}
-              className="btn btn-primary"
-              style={{ fontSize: '0.8125rem' }}
+              style={{ background: 'none', border: 'none', color: 'var(--apple-pink)', cursor: 'pointer' }}
             >
               <Plus size={16} />
-              <span>New Playlist</span>
             </button>
-          )}
-        </div>
-
-        {/* TAB 1: MEDIA LIBRARY */}
-        {activeTab === 'tracks' && (
-          <div>
-            {filteredTracks.length === 0 ? (
-              <div className="glass-panel" style={{
-                textAlign: 'center',
-                padding: '4rem 2rem',
-                color: 'var(--text-secondary)',
-              }}>
-                <Music size={48} style={{ margin: '0 auto 1rem', opacity: 0.3 }} />
-                <h3 style={{ marginBottom: '0.5rem' }}>No Audio Tracks in Vault</h3>
-                <p style={{ fontSize: '0.875rem', marginBottom: '1.5rem' }}>
-                  Upload your first audio file to start private streaming.
-                </p>
-                <button
-                  onClick={() => setActiveTab('upload')}
-                  className="btn btn-primary"
-                >
-                  <Upload size={16} />
-                  <span>Go to Upload Center</span>
-                </button>
-              </div>
-            ) : (
-              <div className="glass-panel" style={{ overflow: 'hidden' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                  <thead>
-                    <tr style={{
-                      borderBottom: '1px solid var(--border-dim)',
-                      color: 'var(--text-muted)',
-                      fontSize: '0.75rem',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.05em',
-                    }}>
-                      <th style={{ padding: '1rem 1.25rem', width: '3rem' }}>#</th>
-                      <th style={{ padding: '1rem' }}>Title & Artist</th>
-                      <th style={{ padding: '1rem' }}>Album</th>
-                      <th style={{ padding: '1rem' }}>Duration</th>
-                      <th style={{ padding: '1rem' }}>Size</th>
-                      <th style={{ padding: '1rem', textAlign: 'right' }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredTracks.map((track, idx) => {
-                      const isCurrentPlaying = currentTrack?.id === track.id && isPlaying;
-                      return (
-                        <tr
-                          key={track.id}
-                          style={{
-                            borderBottom: '1px solid rgba(255, 255, 255, 0.04)',
-                            background: currentTrack?.id === track.id ? 'rgba(6, 182, 212, 0.06)' : 'transparent',
-                            transition: 'background var(--transition-fast)',
-                          }}
-                        >
-                          <td style={{ padding: '0.9rem 1.25rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                            <button
-                              onClick={() => playTrack(track)}
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                color: isCurrentPlaying ? 'var(--accent-cyan)' : 'var(--text-secondary)',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                              }}
-                            >
-                              {isCurrentPlaying ? <Pause size={16} /> : <Play size={16} />}
-                            </button>
-                          </td>
-                          <td style={{ padding: '0.9rem 1rem' }}>
-                            <div style={{
-                              fontWeight: 600,
-                              color: currentTrack?.id === track.id ? 'var(--accent-cyan)' : 'var(--text-primary)',
-                              fontSize: '0.9125rem',
-                            }}>
-                              {track.title}
-                            </div>
-                            <div style={{ fontSize: '0.78125rem', color: 'var(--text-muted)' }}>
-                              {track.artist}
-                            </div>
-                          </td>
-                          <td style={{ padding: '0.9rem 1rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                            {track.album || '—'}
-                          </td>
-                          <td style={{ padding: '0.9rem 1rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                            {formatTime(track.duration)}
-                          </td>
-                          <td style={{ padding: '0.9rem 1rem', fontSize: '0.8125rem', color: 'var(--text-muted)' }}>
-                            {(track.fileSize / (1024 * 1024)).toFixed(1)} MB
-                          </td>
-                          <td style={{ padding: '0.9rem 1.25rem', textAlign: 'right' }}>
-                            <div style={{ display: 'inline-flex', gap: '0.5rem' }}>
-                              <button
-                                onClick={() => setTrackToAddToPlaylist(track)}
-                                title="Add to Playlist"
-                                className="btn btn-secondary"
-                                style={{ padding: '0.4rem 0.6rem', fontSize: '0.75rem' }}
-                              >
-                                <Plus size={14} />
-                                <span>Add to Playlist</span>
-                              </button>
-                              <button
-                                onClick={() => handleDeleteTrack(track.id)}
-                                title="Delete Track"
-                                className="btn btn-danger"
-                                style={{ padding: '0.4rem 0.6rem' }}
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
           </div>
-        )}
-
-        {/* TAB 2: PLAYLISTS */}
-        {activeTab === 'playlists' && (
-          <div>
-            {selectedPlaylist ? (
-              <div>
-                <div style={{
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+            {playlists.slice(0, 6).map((pl) => (
+              <button
+                key={pl.id}
+                onClick={() => {
+                  handleViewPlaylist(pl);
+                  setActiveTab('playlists');
+                }}
+                style={{
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'space-between',
-                  marginBottom: '1.5rem',
-                }}>
-                  <div>
-                    <button
-                      onClick={() => setSelectedPlaylist(null)}
-                      className="btn btn-secondary"
-                      style={{ marginBottom: '0.75rem', fontSize: '0.8125rem' }}
-                    >
-                      ← Back to All Playlists
-                    </button>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                      <h2>{selectedPlaylist.name}</h2>
-                      <span className={`badge ${selectedPlaylist.visibility === 'public' ? 'badge-public' : 'badge-private'}`}>
-                        {selectedPlaylist.visibility === 'public' ? <Globe size={12} /> : <Lock size={12} />}
-                        {selectedPlaylist.visibility.toUpperCase()}
-                      </span>
-                    </div>
-                    {selectedPlaylist.description && (
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
-                        {selectedPlaylist.description}
-                      </p>
-                    )}
-                  </div>
+                  gap: '0.5rem',
+                  padding: '0.45rem 0.65rem',
+                  borderRadius: 'var(--radius-sm)',
+                  background: selectedPlaylist?.id === pl.id && activeTab === 'playlists' ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
+                  color: 'var(--text-secondary)',
+                  border: 'none',
+                  fontSize: '0.8125rem',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: pl.visibility === 'public' ? 'var(--apple-green)' : 'var(--apple-pink)' }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{pl.name}</span>
+              </button>
+            ))}
+          </div>
+        </div>
 
-                  {selectedPlaylist.isOwner && (
+        {/* User Card */}
+        <div style={{
+          paddingTop: '1rem',
+          borderTop: '1px solid var(--border-hairline)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', overflow: 'hidden' }}>
+            <div style={{
+              width: '2rem',
+              height: '2rem',
+              borderRadius: '50%',
+              background: 'rgba(255, 255, 255, 0.12)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#ffffff',
+            }}>
+              <User size={14} />
+            </div>
+            <div style={{ overflow: 'hidden' }}>
+              <div style={{ fontSize: '0.8125rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {user?.displayName || user?.username}
+              </div>
+              <div style={{ fontSize: '0.6875rem', color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {user?.email}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleLogout}
+            title="Sign Out"
+            style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: '0.25rem' }}
+          >
+            <LogOut size={16} />
+          </button>
+        </div>
+      </aside>
+
+      {/* MAIN VIEWPORT */}
+      <div style={{
+        flex: 1,
+        marginLeft: '0px',
+        paddingLeft: '0px',
+        width: '100%',
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+      }}>
+        {/* Style responsive margin on desktop */}
+        <style jsx>{`
+          @media (min-width: 769px) {
+            div[style*="margin-left"] {
+              margin-left: 260px !important;
+            }
+          }
+        `}</style>
+
+        {/* MOBILE TOP BAR */}
+        <header className="mobile-only" style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 30,
+          background: 'rgba(0, 0, 0, 0.85)',
+          backdropFilter: 'blur(30px)',
+          WebkitBackdropFilter: 'blur(30px)',
+          borderBottom: '1px solid var(--border-hairline)',
+          padding: '0.85rem 1.25rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+            <div style={{
+              width: '2rem',
+              height: '2rem',
+              borderRadius: '0.5rem',
+              background: 'var(--apple-gradient)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              <Music size={14} fill="#ffffff" color="#ffffff" />
+            </div>
+            <span style={{ fontWeight: 800, fontSize: '1.25rem', letterSpacing: '-0.03em' }}>Music</span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <button
+              onClick={() => setShowNewPlaylistModal(true)}
+              style={{ background: 'none', border: 'none', color: 'var(--apple-pink)', cursor: 'pointer' }}
+            >
+              <Plus size={22} />
+            </button>
+            <button
+              onClick={handleLogout}
+              style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+            >
+              <LogOut size={18} />
+            </button>
+          </div>
+        </header>
+
+        {/* MOBILE SEARCH BAR */}
+        <div className="mobile-only" style={{ padding: '0.75rem 1.25rem 0.25rem' }}>
+          <div style={{ position: 'relative' }}>
+            <Search size={15} style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }} />
+            <input
+              type="text"
+              className="apple-search-input"
+              placeholder="Artists, Songs, Lyrics, and More"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{ borderRadius: 'var(--radius-sm)', fontSize: '0.85rem' }}
+            />
+          </div>
+        </div>
+
+        {/* MAIN CONTENT CONTAINER */}
+        <main style={{
+          flex: 1,
+          padding: '1.75rem 1.5rem',
+          paddingBottom: currentTrack ? '140px' : '90px',
+          maxWidth: '1200px',
+          margin: '0 auto',
+          width: '100%',
+        }}>
+          {/* TAB 1: LISTEN NOW (Apple Music Featured Hero) */}
+          {activeTab === 'listen' && (
+            <div>
+              {/* Apple Music Hero Banner */}
+              <div style={{
+                borderRadius: 'var(--radius-xl)',
+                background: 'linear-gradient(135deg, #1f0814 0%, #3a0d1e 50%, #fa243c 100%)',
+                padding: '2.5rem 2rem',
+                position: 'relative',
+                overflow: 'hidden',
+                marginBottom: '2.5rem',
+                boxShadow: '0 16px 40px rgba(250, 36, 60, 0.25)',
+              }}>
+                <div style={{ maxWidth: '520px', position: 'relative', zIndex: 2 }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'rgba(255, 255, 255, 0.7)', marginBottom: '0.5rem' }}>
+                    FEATURED VAULT STREAM
+                  </div>
+                  <h1 style={{ fontSize: 'clamp(1.75rem, 4vw, 2.75rem)', fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1.1, marginBottom: '0.75rem' }}>
+                    Pure Audio Experience
+                  </h1>
+                  <p style={{ fontSize: '0.9375rem', color: 'rgba(255, 255, 255, 0.8)', marginBottom: '1.5rem', lineHeight: 1.5 }}>
+                    High fidelity streaming, custom playlists, and private storage powered by your cloud vault.
+                  </p>
+                  <div style={{ display: 'flex', gap: '0.75rem' }}>
                     <button
-                      onClick={() => handleDeletePlaylist(selectedPlaylist.id)}
-                      className="btn btn-danger"
+                      onClick={() => {
+                        if (tracks.length > 0) playTrack(tracks[0]);
+                      }}
+                      className="btn-apple-primary"
+                      style={{ padding: '0.75rem 1.75rem' }}
                     >
-                      <Trash2 size={16} />
-                      <span>Delete Playlist</span>
+                      <Play size={18} fill="#ffffff" />
+                      <span>Play All Songs</span>
                     </button>
-                  )}
+                    <button
+                      onClick={() => setActiveTab('upload')}
+                      className="btn-apple-secondary"
+                      style={{ padding: '0.75rem 1.25rem', backdropFilter: 'blur(20px)' }}
+                    >
+                      <Upload size={16} />
+                      <span>Upload</span>
+                    </button>
+                  </div>
                 </div>
 
-                {playlistTracks.length === 0 ? (
-                  <div className="glass-panel" style={{ textAlign: 'center', padding: '3rem' }}>
-                    <p style={{ color: 'var(--text-muted)' }}>This playlist contains no tracks yet.</p>
-                  </div>
-                ) : (
-                  <div className="glass-panel" style={{ overflow: 'hidden' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                      <thead>
-                        <tr style={{
-                          borderBottom: '1px solid var(--border-dim)',
-                          color: 'var(--text-muted)',
-                          fontSize: '0.75rem',
-                          textTransform: 'uppercase',
-                        }}>
-                          <th style={{ padding: '1rem', width: '3rem' }}>#</th>
-                          <th style={{ padding: '1rem' }}>Title</th>
-                          <th style={{ padding: '1rem' }}>Artist</th>
-                          <th style={{ padding: '1rem' }}>Duration</th>
-                          <th style={{ padding: '1rem', textAlign: 'right' }}>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {playlistTracks.map((pt, idx) => (
-                          <tr key={pt.id} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.04)' }}>
-                            <td style={{ padding: '0.8rem 1rem' }}>
-                              <button
-                                onClick={() => playTrack(pt)}
-                                style={{
-                                  background: 'none',
-                                  border: 'none',
-                                  color: currentTrack?.id === pt.id && isPlaying ? 'var(--accent-cyan)' : 'var(--text-secondary)',
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                {currentTrack?.id === pt.id && isPlaying ? <Pause size={16} /> : <Play size={16} />}
-                              </button>
-                            </td>
-                            <td style={{ padding: '0.8rem 1rem', fontWeight: 600 }}>{pt.title}</td>
-                            <td style={{ padding: '0.8rem 1rem', color: 'var(--text-secondary)' }}>{pt.artist}</td>
-                            <td style={{ padding: '0.8rem 1rem', color: 'var(--text-secondary)' }}>{formatTime(pt.duration)}</td>
-                            <td style={{ padding: '0.8rem 1rem', textAlign: 'right' }}>
-                              {selectedPlaylist.isOwner && (
-                                <button
-                                  onClick={async () => {
-                                    await fetch(`/api/playlists/${selectedPlaylist.id}?trackId=${pt.id}`, { method: 'DELETE' });
-                                    handleViewPlaylist(selectedPlaylist);
-                                  }}
-                                  className="btn btn-danger"
-                                  style={{ padding: '0.35rem 0.6rem' }}
-                                >
-                                  <Trash2 size={13} />
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                {/* Decorative vinyl/artwork background */}
+                <div style={{
+                  position: 'absolute',
+                  right: '-30px',
+                  bottom: '-30px',
+                  width: '260px',
+                  height: '260px',
+                  borderRadius: '50%',
+                  background: 'radial-gradient(circle, rgba(250, 36, 60, 0.4) 0%, transparent 70%)',
+                  pointerEvents: 'none',
+                }} />
               </div>
-            ) : (
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-                gap: '1.25rem',
-              }}>
-                {playlists.map((pl) => (
-                  <div
-                    key={pl.id}
-                    className="glass-panel-interactive"
-                    style={{ padding: '1.5rem', cursor: 'pointer' }}
-                    onClick={() => handleViewPlaylist(pl)}
+
+              {/* Top Tracks Section */}
+              <div style={{ marginBottom: '2.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                  <h2 style={{ fontSize: '1.35rem', fontWeight: 700, letterSpacing: '-0.02em' }}>Recently Added Songs</h2>
+                  <button
+                    onClick={() => setActiveTab('tracks')}
+                    style={{ background: 'none', border: 'none', color: 'var(--apple-pink)', fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer' }}
                   >
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      marginBottom: '0.75rem',
-                    }}>
+                    See All
+                  </button>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.85rem' }}>
+                  {tracks.slice(0, 6).map((track) => {
+                    const isTrackActive = currentTrack?.id === track.id;
+                    return (
+                      <div
+                        key={track.id}
+                        onClick={() => playTrack(track)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.85rem',
+                          padding: '0.75rem 1rem',
+                          borderRadius: 'var(--radius-md)',
+                          background: isTrackActive ? 'rgba(250, 36, 60, 0.12)' : 'rgba(255, 255, 255, 0.04)',
+                          cursor: 'pointer',
+                          transition: 'background 0.15s var(--ease-apple)',
+                        }}
+                      >
+                        <div style={{
+                          width: '3.25rem',
+                          height: '3.25rem',
+                          borderRadius: '0.65rem',
+                          background: getTrackGradient(track.id),
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0,
+                          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+                        }}>
+                          {isTrackActive && isPlaying ? (
+                            <Pause size={18} fill="#ffffff" color="#ffffff" />
+                          ) : (
+                            <Play size={18} fill="#ffffff" color="#ffffff" style={{ marginLeft: '2px' }} />
+                          )}
+                        </div>
+
+                        <div style={{ flex: 1, overflow: 'hidden' }}>
+                          <div style={{
+                            fontWeight: 600,
+                            fontSize: '0.9125rem',
+                            color: isTrackActive ? 'var(--apple-pink)' : '#ffffff',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}>
+                            {track.title}
+                          </div>
+                          <div style={{ fontSize: '0.78125rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {track.artist}
+                          </div>
+                        </div>
+
+                        <span style={{ fontSize: '0.78125rem', color: 'var(--text-tertiary)' }}>
+                          {formatTime(track.duration)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Playlists Quick Preview */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                  <h2 style={{ fontSize: '1.35rem', fontWeight: 700, letterSpacing: '-0.02em' }}>Playlists</h2>
+                  <button
+                    onClick={() => setActiveTab('playlists')}
+                    style={{ background: 'none', border: 'none', color: 'var(--apple-pink)', fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer' }}
+                  >
+                    See All
+                  </button>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '1.25rem' }}>
+                  {playlists.slice(0, 4).map((pl) => (
+                    <div
+                      key={pl.id}
+                      onClick={() => {
+                        handleViewPlaylist(pl);
+                        setActiveTab('playlists');
+                      }}
+                      style={{ cursor: 'pointer' }}
+                    >
                       <div style={{
-                        width: '2.5rem',
-                        height: '2.5rem',
-                        borderRadius: '0.75rem',
-                        background: 'rgba(99, 102, 241, 0.15)',
-                        border: '1px solid rgba(99, 102, 241, 0.3)',
+                        width: '100%',
+                        aspectRatio: '1 / 1',
+                        borderRadius: 'var(--radius-lg)',
+                        background: getTrackGradient(pl.id),
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        color: 'var(--accent-indigo)',
+                        marginBottom: '0.65rem',
+                        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
                       }}>
-                        <FolderLock size={18} />
+                        <FolderLock size={32} color="#ffffff" />
                       </div>
-                      <span className={`badge ${pl.visibility === 'public' ? 'badge-public' : 'badge-private'}`}>
-                        {pl.visibility === 'public' ? <Globe size={11} /> : <Lock size={11} />}
-                        {pl.visibility.toUpperCase()}
-                      </span>
+                      <div style={{ fontWeight: 600, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {pl.name}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                        {pl.trackCount} Songs • {pl.visibility}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2: SONGS / LIBRARY */}
+          {activeTab === 'tracks' && (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1.5rem' }}>
+                <div>
+                  <h1 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.03em' }}>Songs</h1>
+                  <p style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)' }}>{filteredTracks.length} tracks in personal cloud</p>
+                </div>
+                <button
+                  onClick={() => {
+                    if (filteredTracks.length > 0) playTrack(filteredTracks[0]);
+                  }}
+                  className="btn-apple-primary"
+                  style={{ padding: '0.6rem 1.4rem' }}
+                >
+                  <Play size={16} fill="#ffffff" />
+                  <span>Play</span>
+                </button>
+              </div>
+
+              {filteredTracks.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '4rem 1rem', color: 'var(--text-secondary)' }}>
+                  <Music size={48} style={{ margin: '0 auto 1rem', opacity: 0.3 }} />
+                  <h3>No Songs Found</h3>
+                  <p style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)', marginTop: '0.25rem' }}>
+                    Upload audio files or adjust your search.
+                  </p>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  {filteredTracks.map((track, idx) => {
+                    const isTrackActive = currentTrack?.id === track.id;
+                    return (
+                      <div
+                        key={track.id}
+                        onClick={() => playTrack(track)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '1rem',
+                          padding: '0.85rem 0.5rem',
+                          borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
+                          cursor: 'pointer',
+                          background: isTrackActive ? 'rgba(250, 36, 60, 0.08)' : 'transparent',
+                          borderRadius: 'var(--radius-sm)',
+                        }}
+                      >
+                        {/* Artwork */}
+                        <div style={{
+                          width: '2.75rem',
+                          height: '2.75rem',
+                          borderRadius: '0.5rem',
+                          background: getTrackGradient(track.id),
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0,
+                        }}>
+                          {isTrackActive && isPlaying ? (
+                            <Pause size={16} fill="#ffffff" color="#ffffff" />
+                          ) : (
+                            <Play size={16} fill="#ffffff" color="#ffffff" style={{ marginLeft: '2px' }} />
+                          )}
+                        </div>
+
+                        {/* Title & Artist */}
+                        <div style={{ flex: 1, overflow: 'hidden' }}>
+                          <div style={{
+                            fontWeight: 600,
+                            fontSize: '0.9375rem',
+                            color: isTrackActive ? 'var(--apple-pink)' : '#ffffff',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}>
+                            {track.title}
+                          </div>
+                          <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {track.artist} {track.album ? `• ${track.album}` : ''}
+                          </div>
+                        </div>
+
+                        {/* Duration */}
+                        <span style={{ fontSize: '0.8125rem', color: 'var(--text-tertiary)' }}>
+                          {formatTime(track.duration)}
+                        </span>
+
+                        {/* Action buttons */}
+                        <div style={{ display: 'flex', gap: '0.25rem' }} onClick={(e) => e.stopPropagation()}>
+                          <button
+                            onClick={() => setTrackToAddToPlaylist(track)}
+                            title="Add to Playlist"
+                            style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', padding: '0.4rem', cursor: 'pointer' }}
+                          >
+                            <Plus size={18} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteTrack(track.id)}
+                            title="Delete"
+                            style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', padding: '0.4rem', cursor: 'pointer' }}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 3: PLAYLISTS */}
+          {activeTab === 'playlists' && (
+            <div>
+              {selectedPlaylist ? (
+                <div>
+                  <button
+                    onClick={() => setSelectedPlaylist(null)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--apple-pink)',
+                      fontWeight: 600,
+                      fontSize: '0.875rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.4rem',
+                      cursor: 'pointer',
+                      marginBottom: '1.25rem',
+                    }}
+                  >
+                    ← All Playlists
+                  </button>
+
+                  {/* Playlist Header */}
+                  <div style={{
+                    display: 'flex',
+                    flexDirection: 'row',
+                    gap: '1.5rem',
+                    marginBottom: '2rem',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                  }}>
+                    <div style={{
+                      width: '140px',
+                      height: '140px',
+                      borderRadius: 'var(--radius-lg)',
+                      background: getTrackGradient(selectedPlaylist.id),
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: '0 12px 32px rgba(0, 0, 0, 0.5)',
+                      flexShrink: 0,
+                    }}>
+                      <FolderLock size={56} color="#ffffff" />
                     </div>
 
-                    <h3 style={{ fontSize: '1.1rem', marginBottom: '0.35rem' }}>{pl.name}</h3>
-                    <p style={{
-                      fontSize: '0.8125rem',
-                      color: 'var(--text-secondary)',
-                      marginBottom: '1rem',
-                      minHeight: '2.4rem',
-                    }}>
-                      {pl.description || 'No description provided.'}
-                    </p>
-
-                    <div style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      fontSize: '0.75rem',
-                      color: 'var(--text-muted)',
-                      borderTop: '1px solid var(--border-dim)',
-                      paddingTop: '0.75rem',
-                    }}>
-                      <span>{pl.trackCount} tracks</span>
-                      <span>By {pl.creatorName || 'You'}</span>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--apple-pink)' }}>
+                          PLAYLIST
+                        </span>
+                        <span style={{
+                          fontSize: '0.65rem',
+                          fontWeight: 600,
+                          padding: '0.15rem 0.5rem',
+                          borderRadius: '999px',
+                          background: selectedPlaylist.visibility === 'public' ? 'rgba(48, 209, 88, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                          color: selectedPlaylist.visibility === 'public' ? 'var(--apple-green)' : 'var(--text-secondary)',
+                        }}>
+                          {selectedPlaylist.visibility.toUpperCase()}
+                        </span>
+                      </div>
+                      <h1 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: '0.35rem' }}>
+                        {selectedPlaylist.name}
+                      </h1>
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.75rem' }}>
+                        {selectedPlaylist.description || `Created by ${selectedPlaylist.creatorName || 'You'}`} • {playlistTracks.length} Songs
+                      </p>
+                      <button
+                        onClick={() => {
+                          if (playlistTracks.length > 0) playTrack(playlistTracks[0]);
+                        }}
+                        className="btn-apple-primary"
+                        style={{ padding: '0.55rem 1.4rem' }}
+                      >
+                        <Play size={16} fill="#ffffff" />
+                        <span>Play</span>
+                      </button>
                     </div>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
 
-        {/* TAB 3: UPLOAD CENTER */}
-        {activeTab === 'upload' && (
-          <div style={{ maxWidth: '600px', margin: '0 auto' }}>
-            <div className="glass-panel" style={{ padding: '2.5rem 2rem' }}>
-              <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-                <div style={{
-                  width: '3.5rem',
-                  height: '3.5rem',
-                  borderRadius: '1rem',
-                  background: 'linear-gradient(135deg, rgba(6, 182, 212, 0.15) 0%, rgba(99, 102, 241, 0.15) 100%)',
-                  border: '1px solid rgba(6, 182, 212, 0.3)',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: 'var(--accent-cyan)',
-                  marginBottom: '1rem',
-                }}>
-                  <Upload size={24} />
+                  {/* Playlist Songs */}
+                  {playlistTracks.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-tertiary)' }}>
+                      No songs in this playlist yet. Add songs from your Library.
+                    </div>
+                  ) : (
+                    <div>
+                      {playlistTracks.map((pt) => (
+                        <div
+                          key={pt.id}
+                          onClick={() => playTrack(pt)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '1rem',
+                            padding: '0.8rem 0.5rem',
+                            borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <div style={{
+                            width: '2.5rem',
+                            height: '2.5rem',
+                            borderRadius: '0.5rem',
+                            background: getTrackGradient(pt.id),
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}>
+                            {currentTrack?.id === pt.id && isPlaying ? (
+                              <Pause size={14} fill="#ffffff" color="#ffffff" />
+                            ) : (
+                              <Play size={14} fill="#ffffff" color="#ffffff" style={{ marginLeft: '2px' }} />
+                            )}
+                          </div>
+                          <div style={{ flex: 1, overflow: 'hidden' }}>
+                            <div style={{ fontWeight: 600, fontSize: '0.9rem', color: currentTrack?.id === pt.id ? 'var(--apple-pink)' : '#ffffff' }}>
+                              {pt.title}
+                            </div>
+                            <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                              {pt.artist}
+                            </div>
+                          </div>
+                          <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>
+                            {formatTime(pt.duration)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <h2>Encrypted Media Ingestion</h2>
-                <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                  Files are securely ingested into the protected data vault.
+              ) : (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1.5rem' }}>
+                    <div>
+                      <h1 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.03em' }}>Playlists</h1>
+                      <p style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)' }}>{playlists.length} playlists available</p>
+                    </div>
+                    <button
+                      onClick={() => setShowNewPlaylistModal(true)}
+                      className="btn-apple-primary"
+                    >
+                      <Plus size={16} />
+                      <span>New Playlist</span>
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1.25rem' }}>
+                    {playlists.map((pl) => (
+                      <div
+                        key={pl.id}
+                        onClick={() => handleViewPlaylist(pl)}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <div style={{
+                          width: '100%',
+                          aspectRatio: '1 / 1',
+                          borderRadius: 'var(--radius-lg)',
+                          background: getTrackGradient(pl.id),
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          marginBottom: '0.75rem',
+                          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
+                        }}>
+                          <FolderLock size={44} color="#ffffff" />
+                        </div>
+                        <div style={{ fontWeight: 600, fontSize: '0.9375rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {pl.name}
+                        </div>
+                        <div style={{ fontSize: '0.78125rem', color: 'var(--text-tertiary)' }}>
+                          {pl.trackCount} Songs • {pl.visibility}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 4: ADD MUSIC (UPLOAD) */}
+          {activeTab === 'upload' && (
+            <div style={{ maxWidth: '520px', margin: '0 auto' }}>
+              <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+                <h1 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: '0.5rem' }}>
+                  Add to Music Vault
+                </h1>
+                <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                  Upload high-quality audio files (MP3, FLAC, WAV, AAC, M4A)
                 </p>
               </div>
 
@@ -828,27 +1192,27 @@ export default function WorkspacePage() {
                 <div style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '0.6rem',
-                  padding: '0.75rem 1rem',
+                  gap: '0.65rem',
+                  padding: '0.85rem 1rem',
                   borderRadius: 'var(--radius-md)',
                   marginBottom: '1.5rem',
-                  fontSize: '0.8125rem',
-                  background: uploadStatus.type === 'success' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(244, 63, 94, 0.12)',
-                  color: uploadStatus.type === 'success' ? '#34d399' : '#fda4af',
-                  border: `1px solid ${uploadStatus.type === 'success' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(244, 63, 94, 0.3)'}`,
+                  fontSize: '0.875rem',
+                  background: uploadStatus.type === 'success' ? 'rgba(48, 209, 88, 0.15)' : 'rgba(250, 36, 60, 0.15)',
+                  color: uploadStatus.type === 'success' ? 'var(--apple-green)' : '#ff6b81',
+                  border: `1px solid ${uploadStatus.type === 'success' ? 'rgba(48, 209, 88, 0.3)' : 'rgba(250, 36, 60, 0.3)'}`,
                 }}>
-                  {uploadStatus.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+                  {uploadStatus.type === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
                   <span>{uploadStatus.message}</span>
                 </div>
               )}
 
               <form onSubmit={handleUpload}>
                 <div style={{
-                  border: '2px dashed var(--border-bright)',
-                  borderRadius: 'var(--radius-lg)',
-                  padding: '2.5rem 1.5rem',
+                  border: '2px dashed rgba(255, 255, 255, 0.15)',
+                  borderRadius: 'var(--radius-xl)',
+                  padding: '3rem 1.5rem',
                   textAlign: 'center',
-                  background: 'rgba(255, 255, 255, 0.01)',
+                  background: 'rgba(28, 28, 30, 0.4)',
                   marginBottom: '1.5rem',
                   cursor: 'pointer',
                 }}>
@@ -860,167 +1224,248 @@ export default function WorkspacePage() {
                     style={{ display: 'none' }}
                   />
                   <label htmlFor="audio-upload" style={{ cursor: 'pointer', display: 'block' }}>
-                    <HardDrive size={36} style={{ margin: '0 auto 0.75rem', color: 'var(--accent-cyan)' }} />
-                    <div style={{ fontWeight: 600, fontSize: '0.9375rem', marginBottom: '0.35rem' }}>
-                      {uploadFile ? uploadFile.name : 'Select or Drop Audio File'}
+                    <div style={{
+                      width: '4rem',
+                      height: '4rem',
+                      borderRadius: '50%',
+                      background: 'rgba(250, 36, 60, 0.15)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'var(--apple-pink)',
+                      marginBottom: '1rem',
+                    }}>
+                      <Upload size={28} />
                     </div>
-                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                      Supports MP3, FLAC, WAV, OGG, AAC, M4A (Metadata auto-parsed)
+                    <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: '0.35rem' }}>
+                      {uploadFile ? uploadFile.name : 'Choose Audio File'}
+                    </div>
+                    <p style={{ fontSize: '0.8125rem', color: 'var(--text-tertiary)' }}>
+                      Supports all major audio formats with auto-metadata
                     </p>
                   </label>
                 </div>
 
                 <button
                   type="submit"
-                  className="btn btn-primary"
+                  className="btn-apple-primary"
                   disabled={!uploadFile || uploading}
-                  style={{ width: '100%', padding: '0.85rem' }}
+                  style={{ width: '100%', padding: '0.9rem', fontSize: '1rem', justifyContent: 'center' }}
                 >
-                  {uploading ? (
-                    'Processing & Encrypting...'
-                  ) : (
-                    <>
-                      <Upload size={16} />
-                      <span>Ingest to Vault</span>
-                    </>
-                  )}
+                  {uploading ? 'Ingesting into Vault...' : 'Upload Song'}
                 </button>
               </form>
             </div>
-          </div>
-        )}
-      </main>
+          )}
+        </main>
+      </div>
 
-      {/* FIXED BOTTOM AUDIO PLAYER BAR */}
+      {/* FLOATING MINI PLAYER (Apple Music Style - Mobile & Desktop) */}
       {currentTrack && (
-        <div style={{
-          position: 'fixed',
-          bottom: 0,
-          left: 0,
-          right: 0,
-          height: '5.5rem',
-          background: 'rgba(9, 12, 18, 0.94)',
-          backdropFilter: 'blur(24px)',
-          borderTop: '1px solid var(--border-bright)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0 2rem',
-          zIndex: 50,
-          boxShadow: '0 -10px 30px rgba(0, 0, 0, 0.6)',
-        }}>
-          {/* Left: Track Information */}
-          <div style={{ width: '280px', display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
-            <div style={{
-              width: '3rem',
-              height: '3rem',
-              borderRadius: '0.6rem',
-              background: 'linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#ffffff',
-              boxShadow: '0 4px 12px var(--accent-cyan-glow)',
-            }}>
-              <Music size={20} />
-            </div>
-            <div style={{ overflow: 'hidden' }}>
-              <div style={{
-                fontWeight: 600,
-                fontSize: '0.9rem',
-                whiteSpace: 'nowrap',
-                textOverflow: 'ellipsis',
-                overflow: 'hidden',
-              }}>
-                {currentTrack.title}
-              </div>
-              <div style={{
-                fontSize: '0.75rem',
-                color: 'var(--text-secondary)',
-                whiteSpace: 'nowrap',
-                textOverflow: 'ellipsis',
-                overflow: 'hidden',
-              }}>
-                {currentTrack.artist}
-              </div>
-            </div>
-          </div>
+        <div
+          onClick={() => setIsExpandedPlayer(true)}
+          style={{
+            position: 'fixed',
+            bottom: '72px',
+            left: '12px',
+            right: '12px',
+            maxWidth: '900px',
+            margin: '0 auto',
+            zIndex: 40,
+            cursor: 'pointer',
+          }}
+        >
+          {/* Responsive positioning: on desktop dock to bottom */}
+          <style jsx>{`
+            @media (min-width: 769px) {
+              div[style*="bottom: '72px'"] {
+                bottom: 12px !important;
+                left: 272px !important;
+                right: 20px !important;
+              }
+            }
+          `}</style>
 
-          {/* Center: Controls & Timeline */}
-          <div style={{
-            flex: 1,
-            maxWidth: '620px',
+          <div className="apple-mini-player" style={{
+            padding: '0.65rem 1rem',
             display: 'flex',
-            flexDirection: 'column',
             alignItems: 'center',
-            gap: '0.35rem',
+            justifyContent: 'space-between',
+            gap: '0.85rem',
           }}>
-            {/* Control buttons */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <button
-                onClick={playPrevTrack}
-                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
-              >
-                <SkipBack size={18} />
-              </button>
-              <button
-                onClick={togglePlay}
+            {/* Left: Artwork + Title */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', overflow: 'hidden', flex: 1 }}>
+              <div
+                className={isPlaying ? 'artwork-playing' : ''}
                 style={{
-                  width: '2.5rem',
-                  height: '2.5rem',
-                  borderRadius: '50%',
-                  background: '#ffffff',
-                  border: 'none',
-                  color: '#07090e',
+                  width: '2.75rem',
+                  height: '2.75rem',
+                  borderRadius: '0.55rem',
+                  background: getTrackGradient(currentTrack.id),
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  cursor: 'pointer',
-                  boxShadow: '0 0 16px rgba(255, 255, 255, 0.3)',
+                  flexShrink: 0,
+                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
                 }}
               >
-                {isPlaying ? <Pause size={18} fill="#07090e" /> : <Play size={18} fill="#07090e" style={{ marginLeft: '2px' }} />}
-              </button>
-              <button
-                onClick={playNextTrack}
-                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
-              >
-                <SkipForward size={18} />
-              </button>
+                <Music size={18} fill="#ffffff" color="#ffffff" />
+              </div>
+
+              <div style={{ overflow: 'hidden' }}>
+                <div style={{ fontWeight: 600, fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {currentTrack.title}
+                </div>
+                <div style={{ fontSize: '0.78125rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {currentTrack.artist}
+                </div>
+              </div>
             </div>
 
-            {/* Range Scrub Bar */}
-            <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                {formatTime(currentTime)}
-              </span>
-              <input
-                type="range"
-                min="0"
-                max={duration || currentTrack.duration || 100}
-                value={currentTime}
-                onChange={handleSeek}
-                style={{ flex: 1 }}
-              />
-              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                {formatTime(duration || currentTrack.duration)}
-              </span>
+            {/* Right: Controls */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }} onClick={(e) => e.stopPropagation()}>
+              <button
+                onClick={(e) => togglePlay(e)}
+                style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer', padding: '0.35rem' }}
+              >
+                {isPlaying ? <Pause size={22} fill="#ffffff" /> : <Play size={22} fill="#ffffff" style={{ marginLeft: '2px' }} />}
+              </button>
+
+              <button
+                onClick={(e) => playNextTrack(e)}
+                style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer', padding: '0.35rem' }}
+              >
+                <SkipForward size={22} fill="#ffffff" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* FULL-SCREEN NOW PLAYING MODAL (iOS Apple Music Style) */}
+      {isExpandedPlayer && currentTrack && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 100,
+          background: 'rgba(12, 12, 14, 0.98)',
+          backdropFilter: 'blur(50px) saturate(220%)',
+          WebkitBackdropFilter: 'blur(50px) saturate(220%)',
+          display: 'flex',
+          flexDirection: 'column',
+          padding: '2.5rem 2rem 3rem',
+          overflowY: 'auto',
+        }}>
+          {/* Top Collapse Handle */}
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '2rem' }}>
+            <button
+              onClick={() => setIsExpandedPlayer(false)}
+              style={{
+                background: 'rgba(255, 255, 255, 0.1)',
+                border: 'none',
+                borderRadius: '999px',
+                width: '42px',
+                height: '42px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#ffffff',
+                cursor: 'pointer',
+              }}
+            >
+              <ChevronDown size={24} />
+            </button>
+          </div>
+
+          {/* Large Centered Album Artwork */}
+          <div style={{
+            maxWidth: '380px',
+            width: '100%',
+            aspectRatio: '1 / 1',
+            margin: '0 auto 2.5rem',
+            borderRadius: 'var(--radius-xl)',
+            background: getTrackGradient(currentTrack.id),
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 24px 60px rgba(0, 0, 0, 0.7), 0 8px 30px var(--apple-pink-glow)',
+          }}>
+            <Music size={80} fill="#ffffff" color="#ffffff" />
+          </div>
+
+          {/* Track Info */}
+          <div style={{ maxWidth: '420px', width: '100%', margin: '0 auto 1.5rem', textAlign: 'left' }}>
+            <h2 style={{ fontSize: '1.65rem', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: '0.25rem' }}>
+              {currentTrack.title}
+            </h2>
+            <p style={{ fontSize: '1.1rem', color: 'var(--apple-pink)', fontWeight: 500 }}>
+              {currentTrack.artist}
+            </p>
+          </div>
+
+          {/* Scrub Timeline */}
+          <div style={{ maxWidth: '420px', width: '100%', margin: '0 auto 2rem' }}>
+            <input
+              type="range"
+              min="0"
+              max={duration || currentTrack.duration || 100}
+              value={currentTime}
+              onChange={handleSeek}
+              style={{ width: '100%', height: '6px' }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem', color: 'var(--text-tertiary)', marginTop: '0.5rem', fontFamily: 'var(--font-mono)' }}>
+              <span>{formatTime(currentTime)}</span>
+              <span>-{formatTime((duration || currentTrack.duration) - currentTime)}</span>
             </div>
           </div>
 
-          {/* Right: Volume Slider */}
+          {/* Primary Playback Controls */}
           <div style={{
-            width: '220px',
+            maxWidth: '340px',
+            width: '100%',
+            margin: '0 auto 2.5rem',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'flex-end',
-            gap: '0.6rem',
+            justifyContent: 'space-between',
           }}>
             <button
-              onClick={toggleMute}
-              style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+              onClick={playPrevTrack}
+              style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer', padding: '0.5rem' }}
             >
-              {isMuted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
+              <SkipBack size={32} fill="#ffffff" />
+            </button>
+
+            <button
+              onClick={togglePlay}
+              style={{
+                width: '4.5rem',
+                height: '4.5rem',
+                borderRadius: '50%',
+                background: '#ffffff',
+                border: 'none',
+                color: '#000000',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                boxShadow: '0 8px 24px rgba(255, 255, 255, 0.25)',
+              }}
+            >
+              {isPlaying ? <Pause size={32} fill="#000000" /> : <Play size={32} fill="#000000" style={{ marginLeft: '4px' }} />}
+            </button>
+
+            <button
+              onClick={playNextTrack}
+              style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer', padding: '0.5rem' }}
+            >
+              <SkipForward size={32} fill="#ffffff" />
+            </button>
+          </div>
+
+          {/* Volume Slider */}
+          <div style={{ maxWidth: '340px', width: '100%', margin: '0 auto', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <button onClick={toggleMute} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer' }}>
+              {isMuted || volume === 0 ? <VolumeX size={20} /> : <Volume1 size={20} />}
             </button>
             <input
               type="range"
@@ -1029,11 +1474,105 @@ export default function WorkspacePage() {
               step="0.01"
               value={isMuted ? 0 : volume}
               onChange={handleVolumeChange}
-              style={{ width: '100px' }}
+              style={{ flex: 1, height: '4px' }}
             />
+            <Volume2 size={20} color="var(--text-tertiary)" />
           </div>
         </div>
       )}
+
+      {/* MOBILE BOTTOM TAB BAR (iOS Apple Music Style) */}
+      <nav className="mobile-only" style={{
+        position: 'fixed',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        height: '64px',
+        background: 'rgba(18, 18, 20, 0.95)',
+        backdropFilter: 'blur(30px)',
+        WebkitBackdropFilter: 'blur(30px)',
+        borderTop: '1px solid var(--border-hairline)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-around',
+        zIndex: 35,
+      }}>
+        <button
+          onClick={() => setActiveTab('listen')}
+          style={{
+            background: 'none',
+            border: 'none',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '0.2rem',
+            color: activeTab === 'listen' ? 'var(--apple-pink)' : 'var(--text-tertiary)',
+            cursor: 'pointer',
+            fontSize: '0.65rem',
+            fontWeight: 600,
+          }}
+        >
+          <Compass size={20} />
+          <span>Listen Now</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('tracks')}
+          style={{
+            background: 'none',
+            border: 'none',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '0.2rem',
+            color: activeTab === 'tracks' ? 'var(--apple-pink)' : 'var(--text-tertiary)',
+            cursor: 'pointer',
+            fontSize: '0.65rem',
+            fontWeight: 600,
+          }}
+        >
+          <Music size={20} />
+          <span>Library</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('playlists')}
+          style={{
+            background: 'none',
+            border: 'none',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '0.2rem',
+            color: activeTab === 'playlists' ? 'var(--apple-pink)' : 'var(--text-tertiary)',
+            cursor: 'pointer',
+            fontSize: '0.65rem',
+            fontWeight: 600,
+          }}
+        >
+          <ListMusic size={20} />
+          <span>Playlists</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('upload')}
+          style={{
+            background: 'none',
+            border: 'none',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '0.2rem',
+            color: activeTab === 'upload' ? 'var(--apple-pink)' : 'var(--text-tertiary)',
+            cursor: 'pointer',
+            fontSize: '0.65rem',
+            fontWeight: 600,
+          }}
+        >
+          <Upload size={20} />
+          <span>Add Music</span>
+        </button>
+      </nav>
 
       {/* CREATE PLAYLIST MODAL */}
       {showNewPlaylistModal && (
@@ -1041,76 +1580,84 @@ export default function WorkspacePage() {
           position: 'fixed',
           inset: 0,
           background: 'rgba(0, 0, 0, 0.75)',
-          backdropFilter: 'blur(8px)',
+          backdropFilter: 'blur(20px)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 60,
-          padding: '1rem',
+          zIndex: 80,
+          padding: '1.25rem',
         }}>
-          <div className="glass-panel animate-fade-in" style={{ width: '100%', maxWidth: '420px', padding: '2rem' }}>
-            <h3 style={{ marginBottom: '1rem' }}>Create Playlist</h3>
+          <div className="apple-glass" style={{ width: '100%', maxWidth: '400px', padding: '2rem' }}>
+            <h2 style={{ fontSize: '1.35rem', fontWeight: 800, marginBottom: '1.25rem' }}>New Playlist</h2>
             <form onSubmit={handleCreatePlaylist}>
-              <div className="form-group">
-                <label className="form-label">Playlist Name</label>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.4rem' }}>
+                  Playlist Name
+                </label>
                 <input
                   type="text"
-                  className="form-input"
-                  placeholder="e.g. Focus Audio"
+                  className="apple-search-input"
+                  placeholder="e.g. Chill Beats"
                   value={newPlaylistName}
                   onChange={(e) => setNewPlaylistName(e.target.value)}
                   required
+                  style={{ paddingLeft: '1rem' }}
                 />
               </div>
 
-              <div className="form-group">
-                <label className="form-label">Description (Optional)</label>
+              <div style={{ marginBottom: '1.25rem' }}>
+                <label style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.4rem' }}>
+                  Description (Optional)
+                </label>
                 <input
                   type="text"
-                  className="form-input"
-                  placeholder="Brief notes..."
+                  className="apple-search-input"
+                  placeholder="Description..."
                   value={newPlaylistDesc}
                   onChange={(e) => setNewPlaylistDesc(e.target.value)}
+                  style={{ paddingLeft: '1rem' }}
                 />
               </div>
 
-              <div className="form-group">
-                <label className="form-label">Access Visibility</label>
-                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
+              <div style={{ marginBottom: '1.75rem' }}>
+                <label style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>
+                  Visibility
+                </label>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
                   <button
                     type="button"
                     onClick={() => setNewPlaylistVisibility('private')}
-                    className={`btn ${newPlaylistVisibility === 'private' ? 'btn-primary' : 'btn-secondary'}`}
-                    style={{ flex: 1, fontSize: '0.8125rem' }}
+                    className={`btn-apple-secondary ${newPlaylistVisibility === 'private' ? 'btn-apple-primary' : ''}`}
+                    style={{ flex: 1, justifyContent: 'center' }}
                   >
                     <Lock size={14} />
-                    <span>Private (Only Me)</span>
+                    <span>Private</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setNewPlaylistVisibility('public')}
-                    className={`btn ${newPlaylistVisibility === 'public' ? 'btn-primary' : 'btn-secondary'}`}
-                    style={{ flex: 1, fontSize: '0.8125rem' }}
+                    className={`btn-apple-secondary ${newPlaylistVisibility === 'public' ? 'btn-apple-primary' : ''}`}
+                    style={{ flex: 1, justifyContent: 'center' }}
                   >
                     <Globe size={14} />
-                    <span>Public (Members)</span>
+                    <span>Public</span>
                   </button>
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.75rem' }}>
+              <div style={{ display: 'flex', gap: '0.75rem' }}>
                 <button
                   type="button"
                   onClick={() => setShowNewPlaylistModal(false)}
-                  className="btn btn-secondary"
-                  style={{ flex: 1 }}
+                  className="btn-apple-secondary"
+                  style={{ flex: 1, justifyContent: 'center' }}
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="btn btn-primary"
-                  style={{ flex: 1 }}
+                  className="btn-apple-primary"
+                  style={{ flex: 1, justifyContent: 'center' }}
                 >
                   Create
                 </button>
@@ -1120,40 +1667,40 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      {/* ADD TO PLAYLIST SELECTION MODAL */}
+      {/* ADD TO PLAYLIST MODAL */}
       {trackToAddToPlaylist && (
         <div style={{
           position: 'fixed',
           inset: 0,
           background: 'rgba(0, 0, 0, 0.75)',
-          backdropFilter: 'blur(8px)',
+          backdropFilter: 'blur(20px)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 60,
-          padding: '1rem',
+          zIndex: 80,
+          padding: '1.25rem',
         }}>
-          <div className="glass-panel animate-fade-in" style={{ width: '100%', maxWidth: '380px', padding: '2rem' }}>
-            <h3 style={{ marginBottom: '0.5rem' }}>Add Track to Playlist</h3>
+          <div className="apple-glass" style={{ width: '100%', maxWidth: '380px', padding: '1.75rem' }}>
+            <h3 style={{ fontSize: '1.25rem', fontWeight: 800, marginBottom: '0.35rem' }}>Add to Playlist</h3>
             <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginBottom: '1.25rem' }}>
               &ldquo;{trackToAddToPlaylist.title}&rdquo;
             </p>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '240px', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '220px', overflowY: 'auto', marginBottom: '1.25rem' }}>
               {playlists.filter((p) => p.isOwner).length === 0 ? (
-                <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>
-                  You don&apos;t have any playlists yet.
+                <p style={{ fontSize: '0.8125rem', color: 'var(--text-tertiary)', textAlign: 'center', padding: '1rem' }}>
+                  No playlists yet. Create one first!
                 </p>
               ) : (
                 playlists.filter((p) => p.isOwner).map((pl) => (
                   <button
                     key={pl.id}
                     onClick={() => handleAddTrackToPlaylist(pl.id)}
-                    className="btn btn-secondary"
-                    style={{ justifyContent: 'space-between', padding: '0.75rem 1rem' }}
+                    className="btn-apple-secondary"
+                    style={{ justifyContent: 'space-between', padding: '0.75rem 1rem', width: '100%' }}
                   >
                     <span>{pl.name}</span>
-                    <span className="badge badge-stealth">{pl.trackCount} tracks</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>{pl.trackCount} Songs</span>
                   </button>
                 ))
               )}
@@ -1161,10 +1708,10 @@ export default function WorkspacePage() {
 
             <button
               onClick={() => setTrackToAddToPlaylist(null)}
-              className="btn btn-secondary"
-              style={{ width: '100%', marginTop: '1.25rem' }}
+              className="btn-apple-secondary"
+              style={{ width: '100%', justifyContent: 'center' }}
             >
-              Close
+              Done
             </button>
           </div>
         </div>
