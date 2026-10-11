@@ -38,6 +38,10 @@ import {
   MoreHorizontal,
   Maximize2,
   Users,
+  X,
+  Minimize2,
+  MessageSquareQuote,
+  FileAudio,
 } from 'lucide-react';
 
 interface CommunityUser {
@@ -98,7 +102,7 @@ function getTrackGradient(id: string) {
 export default function WorkspacePage() {
   const router = useRouter();
   const [user, setUser] = useState<{ id: string; username: string; email: string; displayName?: string } | null>(null);
-  const [activeTab, setActiveTab] = useState<'listen' | 'tracks' | 'playlists' | 'upload'>('listen');
+  const [activeTab, setActiveTab] = useState<'listen' | 'tracks' | 'playlists' | 'upload' | 'profile'>('listen');
 
   // Data states
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -122,13 +126,19 @@ export default function WorkspacePage() {
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Profile modal state
-  const [showProfileModal, setShowProfileModal] = useState(false);
+  // Profile view & song filter state
+  const [profileSongFilter, setProfileSongFilter] = useState<'all' | 'public' | 'private'>('all');
 
-  // Upload state
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  // Multi-file upload state
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploadVisibility, setUploadVisibility] = useState<'public' | 'private'>('public');
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{
+    current: number;
+    total: number;
+    currentFileName: string;
+    percent: number;
+  } | null>(null);
   const [uploadStatus, setUploadStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Playlist state
@@ -288,6 +298,17 @@ export default function WorkspacePage() {
     }
   }, [currentTrack]);
 
+  // Synchronize audio element volume reactively
+  useEffect(() => {
+    if (audioRef.current) {
+      try {
+        audioRef.current.volume = isMuted ? 0 : volume;
+      } catch (err) {
+        console.warn('Volume set error:', err);
+      }
+    }
+  }, [volume, isMuted]);
+
   // Audio Playback
   function playTrack(track: Track) {
     setPlaybackError(null);
@@ -297,6 +318,9 @@ export default function WorkspacePage() {
         audioRef.current?.pause();
         setIsPlaying(false);
       } else {
+        if (audioRef.current) {
+          audioRef.current.volume = isMuted ? 0 : volume;
+        }
         audioRef.current?.play();
         setIsPlaying(true);
       }
@@ -310,10 +334,15 @@ export default function WorkspacePage() {
 
     if (audioRef.current) {
       audioRef.current.src = `/api/tracks/${track.id}/stream`;
+      audioRef.current.volume = isMuted ? 0 : volume;
       audioRef.current.load();
+      audioRef.current.volume = isMuted ? 0 : volume;
       audioRef.current
         .play()
         .then(() => {
+          if (audioRef.current) {
+            audioRef.current.volume = isMuted ? 0 : volume;
+          }
           setIsBuffering(false);
           setIsPlaying(true);
         })
@@ -331,6 +360,7 @@ export default function WorkspacePage() {
       audioRef.current.pause();
       setIsPlaying(false);
     } else {
+      audioRef.current.volume = isMuted ? 0 : volume;
       audioRef.current.play().catch((err) => console.warn('Play error:', err));
       setIsPlaying(true);
     }
@@ -354,18 +384,22 @@ export default function WorkspacePage() {
   }
 
   function handleVolumeChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const newVol = parseFloat(e.target.value);
+    const newVol = Math.max(0, Math.min(1, parseFloat(e.target.value)));
     setVolume(newVol);
+    if (newVol > 0 && isMuted) {
+      setIsMuted(false);
+    }
     if (audioRef.current) {
       audioRef.current.volume = newVol;
-      setIsMuted(newVol === 0);
     }
   }
 
   function toggleMute() {
     if (!audioRef.current) return;
     if (isMuted) {
-      audioRef.current.volume = volume || 0.5;
+      const targetVol = volume > 0 ? volume : 0.8;
+      setVolume(targetVol);
+      audioRef.current.volume = targetVol;
       setIsMuted(false);
     } else {
       audioRef.current.volume = 0;
@@ -394,38 +428,83 @@ export default function WorkspacePage() {
     playTrack(tracks[prevIndex]);
   }
 
-  // Upload handler
+  // Batch Multi-File Upload handler (Sequential to prevent Vercel 4.5MB request payload limit)
   async function handleUpload(e: React.FormEvent) {
     e.preventDefault();
-    if (!uploadFile) return;
+    if (uploadFiles.length === 0) return;
 
     setUploading(true);
     setUploadStatus(null);
 
-    const formData = new FormData();
-    formData.append('file', uploadFile);
-    formData.append('visibility', uploadVisibility);
+    let successCount = 0;
+    let failCount = 0;
+    const total = uploadFiles.length;
 
-    try {
-      const res = await fetch('/api/tracks/upload', {
-        method: 'POST',
-        body: formData,
+    for (let i = 0; i < total; i++) {
+      const currentF = uploadFiles[i];
+      setUploadProgress({
+        current: i + 1,
+        total,
+        currentFileName: currentF.name,
+        percent: Math.round(((i + 1) / total) * 100),
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        setUploadStatus({ type: 'error', message: data.error || 'Upload failed' });
-      } else {
-        setUploadStatus({ type: 'success', message: `Added to Library: "${data.track.title}"` });
-        setUploadFile(null);
-        await loadTracks();
-        setActiveTab('tracks');
+      const formData = new FormData();
+      formData.append('file', currentF);
+      formData.append('visibility', uploadVisibility);
+
+      try {
+        const res = await fetch('/api/tracks/upload', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (res.ok) {
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch {
+        failCount++;
       }
-    } catch {
-      setUploadStatus({ type: 'error', message: 'Network connection failed' });
-    } finally {
-      setUploading(false);
     }
+
+    setUploading(false);
+    setUploadProgress(null);
+
+    if (successCount > 0) {
+      setUploadFiles([]);
+      await loadTracks();
+      setUploadStatus({
+        type: 'success',
+        message: `Successfully added ${successCount} track${successCount > 1 ? 's' : ''} to your Vault!${failCount > 0 ? ` (${failCount} failed)` : ''}`,
+      });
+      setTimeout(() => {
+        setActiveTab('tracks');
+      }, 1000);
+    } else {
+      setUploadStatus({
+        type: 'error',
+        message: 'Upload failed. Please ensure audio files are valid MP3, WAV, FLAC, M4A or AAC formats under 4.5MB.',
+      });
+    }
+  }
+
+  function handleFilesAdded(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const valid = Array.from(files).filter((f) => {
+      const ext = f.name.substring(f.name.lastIndexOf('.')).toLowerCase();
+      return ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac'].includes(ext) || f.type.startsWith('audio/');
+    });
+    setUploadFiles((prev) => {
+      const existing = new Set(prev.map((f) => `${f.name}-${f.size}`));
+      const newItems = valid.filter((f) => !existing.has(`${f.name}-${f.size}`));
+      return [...prev, ...newItems];
+    });
+  }
+
+  function removeUploadFile(index: number) {
+    setUploadFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
   // Playlist handlers
@@ -547,16 +626,24 @@ export default function WorkspacePage() {
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: '#000000', color: '#ffffff' }}>
-      {/* Audio Element with Full Event Bindings */}
+      {/* Audio Element with Full Event Bindings & Volume Enforcement */}
       <audio
         ref={audioRef}
         loop={isLooping}
         onTimeUpdate={handleTimeUpdate}
         onWaiting={() => setIsBuffering(true)}
-        onCanPlay={() => setIsBuffering(false)}
+        onCanPlay={() => {
+          setIsBuffering(false);
+          if (audioRef.current) {
+            audioRef.current.volume = isMuted ? 0 : volume;
+          }
+        }}
         onPlaying={() => {
           setIsBuffering(false);
           setIsPlaying(true);
+          if (audioRef.current) {
+            audioRef.current.volume = isMuted ? 0 : volume;
+          }
         }}
         onEnded={() => {
           if (!isLooping) playNextTrack();
@@ -568,7 +655,12 @@ export default function WorkspacePage() {
             'Unable to stream this audio track. If this file was uploaded before the cloud storage upgrade, please re-upload it.'
           );
         }}
-        onLoadedMetadata={handleTimeUpdate}
+        onLoadedMetadata={() => {
+          handleTimeUpdate();
+          if (audioRef.current) {
+            audioRef.current.volume = isMuted ? 0 : volume;
+          }
+        }}
       />
 
       {/* DESKTOP SIDEBAR (macOS Apple Music Style - FIXED FULL HEIGHT SO PROFILE NEVER MOVES) */}
@@ -736,6 +828,27 @@ export default function WorkspacePage() {
               <Upload size={18} />
               <span>Add Music</span>
             </button>
+
+            <button
+              onClick={() => setActiveTab('profile')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                padding: '0.6rem 0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                background: activeTab === 'profile' ? 'rgba(250, 36, 60, 0.15)' : 'transparent',
+                color: activeTab === 'profile' ? 'var(--apple-pink)' : 'var(--text-white)',
+                border: 'none',
+                fontWeight: activeTab === 'profile' ? 600 : 500,
+                fontSize: '0.875rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              <User size={18} />
+              <span>My Profile & Vault</span>
+            </button>
           </nav>
 
           {/* Quick Playlists section */}
@@ -782,7 +895,7 @@ export default function WorkspacePage() {
           </div>
         </div>
 
-        {/* User Profile Card (Fixed cleanly at sidebar bottom - opens Profile Modal) */}
+        {/* User Profile Card (Fixed cleanly at sidebar bottom - opens Profile Page) */}
         <div style={{
           paddingTop: '1rem',
           borderTop: '1px solid var(--border-hairline)',
@@ -791,7 +904,7 @@ export default function WorkspacePage() {
           justifyContent: 'space-between',
         }}>
           <div
-            onClick={() => setShowProfileModal(true)}
+            onClick={() => setActiveTab('profile')}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -818,8 +931,8 @@ export default function WorkspacePage() {
               <div style={{ fontSize: '0.8125rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {user?.displayName || user?.username}
               </div>
-              <div style={{ fontSize: '0.6875rem', color: 'var(--apple-pink)', fontWeight: 500 }}>
-                Manage Profile & Privacy
+              <div style={{ fontSize: '0.6875rem', color: activeTab === 'profile' ? 'var(--apple-pink)' : 'var(--text-secondary)', fontWeight: 500 }}>
+                Manage Profile & Vault
               </div>
             </div>
           </div>
@@ -883,7 +996,8 @@ export default function WorkspacePage() {
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
             <button
-              onClick={() => setShowProfileModal(true)}
+              onClick={() => setActiveTab('profile')}
+              title="My Profile"
               style={{
                 width: '1.9rem',
                 height: '1.9rem',
@@ -1460,7 +1574,7 @@ export default function WorkspacePage() {
                 </div>
                 <div style={{ display: 'flex', gap: '0.75rem' }}>
                   <button
-                    onClick={() => setShowProfileModal(true)}
+                    onClick={() => setActiveTab('profile')}
                     className="btn-apple-secondary"
                     style={{ fontSize: '0.8125rem' }}
                   >
@@ -1856,15 +1970,15 @@ export default function WorkspacePage() {
             </div>
           )}
 
-          {/* TAB 4: ADD MUSIC (UPLOAD WITH VISIBILITY OPTION) */}
+          {/* TAB 4: ADD MUSIC (MULTI-TRACK BATCH UPLOAD WITH SEQUENTIAL STREAMING) */}
           {activeTab === 'upload' && (
-            <div style={{ maxWidth: '520px', margin: '0 auto' }}>
+            <div style={{ maxWidth: '620px', margin: '0 auto' }}>
               <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
                 <h1 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: '0.5rem' }}>
                   Add to Music Vault
                 </h1>
                 <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-                  Upload high-quality audio files (stored persistently in your cloud vault)
+                  Upload multiple audio tracks at once — persistent cloud storage with automatic metadata extraction.
                 </p>
               </div>
 
@@ -1886,54 +2000,198 @@ export default function WorkspacePage() {
                 </div>
               )}
 
-              <form onSubmit={handleUpload}>
+              {/* Upload Progress Indicator during batch uploading */}
+              {uploading && uploadProgress && (
                 <div style={{
-                  border: '2px dashed rgba(255, 255, 255, 0.15)',
-                  borderRadius: 'var(--radius-xl)',
-                  padding: '3rem 1.5rem',
-                  textAlign: 'center',
-                  background: 'rgba(28, 28, 30, 0.4)',
+                  background: 'rgba(28, 28, 32, 0.9)',
+                  border: '1px solid rgba(250, 36, 60, 0.3)',
+                  borderRadius: 'var(--radius-lg)',
+                  padding: '1.25rem',
                   marginBottom: '1.5rem',
-                  cursor: 'pointer',
+                  boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5)',
                 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Loader2 size={16} className="animate-spin" color="var(--apple-pink)" />
+                      <span style={{ fontSize: '0.875rem', fontWeight: 600 }}>
+                        Uploading Track {uploadProgress.current} of {uploadProgress.total}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: '0.8125rem', color: 'var(--apple-pink)', fontWeight: 700 }}>
+                      {uploadProgress.percent}%
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.6rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    &ldquo;{uploadProgress.currentFileName}&rdquo;
+                  </div>
+                  <div style={{ height: '6px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '999px', overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%',
+                      width: `${uploadProgress.percent}%`,
+                      background: 'var(--apple-gradient)',
+                      borderRadius: '999px',
+                      transition: 'width 0.3s ease',
+                    }} />
+                  </div>
+                </div>
+              )}
+
+              <form onSubmit={handleUpload}>
+                {/* Drag and Drop / Multi-file Picker Zone */}
+                <div
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    handleFilesAdded(e.dataTransfer.files);
+                  }}
+                  style={{
+                    border: '2px dashed rgba(255, 255, 255, 0.18)',
+                    borderRadius: 'var(--radius-xl)',
+                    padding: uploadFiles.length > 0 ? '1.5rem 1.25rem' : '3rem 1.5rem',
+                    textAlign: 'center',
+                    background: 'rgba(28, 28, 30, 0.45)',
+                    marginBottom: '1.5rem',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                  }}
+                >
                   <input
                     type="file"
-                    id="audio-upload"
+                    id="audio-upload-multiple"
                     accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac"
-                    onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                    multiple
+                    disabled={uploading}
+                    onChange={(e) => {
+                      handleFilesAdded(e.target.files);
+                      e.target.value = '';
+                    }}
                     style={{ display: 'none' }}
                   />
-                  <label htmlFor="audio-upload" style={{ cursor: 'pointer', display: 'block' }}>
+                  <label htmlFor="audio-upload-multiple" style={{ cursor: uploading ? 'not-allowed' : 'pointer', display: 'block' }}>
                     <div style={{
-                      width: '4rem',
-                      height: '4rem',
+                      width: '3.75rem',
+                      height: '3.75rem',
                       borderRadius: '50%',
                       background: 'rgba(250, 36, 60, 0.15)',
                       display: 'inline-flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       color: 'var(--apple-pink)',
-                      marginBottom: '1rem',
+                      marginBottom: '0.85rem',
                     }}>
-                      <Upload size={28} />
+                      <Upload size={26} />
                     </div>
-                    <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: '0.35rem' }}>
-                      {uploadFile ? uploadFile.name : 'Choose Audio File'}
+                    <div style={{ fontWeight: 700, fontSize: '1.05rem', marginBottom: '0.35rem' }}>
+                      {uploadFiles.length === 0 ? 'Choose Multiple Audio Files or Drop Here' : 'Add More Audio Files'}
                     </div>
                     <p style={{ fontSize: '0.8125rem', color: 'var(--text-tertiary)' }}>
-                      Supports all major audio formats with auto-metadata
+                      Supports MP3, WAV, FLAC, M4A, AAC • Select multiple tracks at once
                     </p>
                   </label>
                 </div>
 
-                {/* Default Visibility Selector */}
+                {/* Selected Files Batch Queue List */}
+                {uploadFiles.length > 0 && (
+                  <div style={{
+                    background: 'rgba(255, 255, 255, 0.03)',
+                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    borderRadius: 'var(--radius-lg)',
+                    padding: '1.25rem',
+                    marginBottom: '1.5rem',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Music size={16} color="var(--apple-pink)" />
+                        <span style={{ fontSize: '0.875rem', fontWeight: 700 }}>
+                          Selected Queue ({uploadFiles.length} Tracks)
+                        </span>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>
+                          • {(uploadFiles.reduce((acc, f) => acc + f.size, 0) / (1024 * 1024)).toFixed(1)} MB total
+                        </span>
+                      </div>
+
+                      {!uploading && (
+                        <button
+                          type="button"
+                          onClick={() => setUploadFiles([])}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: 'var(--text-tertiary)',
+                            fontSize: '0.75rem',
+                            cursor: 'pointer',
+                            padding: '0.2rem 0.5rem',
+                            borderRadius: '4px',
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.color = '#ff6b81')}
+                          onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-tertiary)')}
+                        >
+                          Clear All
+                        </button>
+                      )}
+                    </div>
+
+                    <div style={{ maxHeight: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      {uploadFiles.map((f, idx) => (
+                        <div
+                          key={`${f.name}-${f.size}-${idx}`}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '0.55rem 0.75rem',
+                            borderRadius: 'var(--radius-sm)',
+                            background: 'rgba(255, 255, 255, 0.04)',
+                            fontSize: '0.8125rem',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', overflow: 'hidden', flex: 1, marginRight: '0.5rem' }}>
+                            <FileAudio size={16} color="var(--apple-pink)" style={{ flexShrink: 0 }} />
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500 }}>
+                              {f.name}
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
+                              {(f.size / (1024 * 1024)).toFixed(1)} MB
+                            </span>
+                            {!uploading && (
+                              <button
+                                type="button"
+                                onClick={() => removeUploadFile(idx)}
+                                title="Remove track"
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: 'var(--text-tertiary)',
+                                  cursor: 'pointer',
+                                  padding: '0.15rem',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                }}
+                                onMouseEnter={(e) => (e.currentTarget.style.color = '#ff6b81')}
+                                onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-tertiary)')}
+                              >
+                                <X size={15} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Default Visibility Selector for the batch */}
                 <div style={{ marginBottom: '1.5rem' }}>
-                  <label style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>
-                    Initial Privacy Setting
+                  <label style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>
+                    Batch Visibility Setting
                   </label>
                   <div style={{ display: 'flex', gap: '0.75rem' }}>
                     <button
                       type="button"
+                      disabled={uploading}
                       onClick={() => setUploadVisibility('public')}
                       className={`btn-apple-secondary ${uploadVisibility === 'public' ? 'btn-apple-primary' : ''}`}
                       style={{ flex: 1, justifyContent: 'center' }}
@@ -1943,6 +2201,7 @@ export default function WorkspacePage() {
                     </button>
                     <button
                       type="button"
+                      disabled={uploading}
                       onClick={() => setUploadVisibility('private')}
                       className={`btn-apple-secondary ${uploadVisibility === 'private' ? 'btn-apple-primary' : ''}`}
                       style={{ flex: 1, justifyContent: 'center' }}
@@ -1956,19 +2215,423 @@ export default function WorkspacePage() {
                 <button
                   type="submit"
                   className="btn-apple-primary"
-                  disabled={!uploadFile || uploading}
-                  style={{ width: '100%', padding: '0.9rem', fontSize: '1rem', justifyContent: 'center' }}
+                  disabled={uploadFiles.length === 0 || uploading}
+                  style={{
+                    width: '100%',
+                    padding: '0.9rem',
+                    fontSize: '1rem',
+                    justifyContent: 'center',
+                    opacity: uploadFiles.length === 0 || uploading ? 0.6 : 1,
+                    cursor: uploadFiles.length === 0 || uploading ? 'not-allowed' : 'pointer',
+                  }}
                 >
                   {uploading ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <Loader2 size={18} className="animate-spin" />
-                      <span>Ingesting into Vault...</span>
+                      <span>Uploading {uploadFiles.length} Songs to Cloud Vault...</span>
                     </div>
                   ) : (
-                    'Upload Song'
+                    `Upload ${uploadFiles.length > 0 ? `${uploadFiles.length} ` : ''}Song${uploadFiles.length === 1 ? '' : 's'}`
                   )}
                 </button>
               </form>
+            </div>
+          )}
+
+          {/* TAB 5: PROFILE & PRIVACY MANAGER (DEDICATED FULL PAGE) */}
+          {activeTab === 'profile' && (
+            <div style={{ maxWidth: '920px', margin: '0 auto' }}>
+              {/* Profile Hero Header Card */}
+              <div
+                style={{
+                  background: 'linear-gradient(135deg, rgba(30, 20, 28, 0.7) 0%, rgba(18, 18, 22, 0.95) 100%)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: 'var(--radius-xl)',
+                  padding: '2rem 2.25rem',
+                  marginBottom: '2rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '1.5rem',
+                  boxShadow: '0 16px 40px rgba(0, 0, 0, 0.6)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+                  <div
+                    style={{
+                      width: '4.8rem',
+                      height: '4.8rem',
+                      borderRadius: '50%',
+                      background: 'var(--apple-gradient)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: '0 8px 24px var(--apple-pink-glow)',
+                      flexShrink: 0,
+                    }}
+                  >
+                    <User size={34} color="#ffffff" />
+                  </div>
+
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.25rem' }}>
+                      <h1 style={{ fontSize: '1.85rem', fontWeight: 800, letterSpacing: '-0.03em' }}>
+                        {user?.displayName || user?.username}
+                      </h1>
+                      <span
+                        style={{
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          background: 'rgba(250, 36, 60, 0.2)',
+                          color: 'var(--apple-pink)',
+                          padding: '0.2rem 0.55rem',
+                          borderRadius: '999px',
+                          border: '1px solid rgba(250, 36, 60, 0.3)',
+                        }}
+                      >
+                        VAULT PRO
+                      </span>
+                    </div>
+                    <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                      @{user?.username} • {user?.email}
+                    </p>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>
+                      Connected to Turso Cloud Distributed Database
+                    </p>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <button
+                    onClick={() => setActiveTab('upload')}
+                    className="btn-apple-primary"
+                    style={{ fontSize: '0.85rem', padding: '0.65rem 1.25rem' }}
+                  >
+                    <Upload size={16} />
+                    <span>Upload Songs</span>
+                  </button>
+                  <button
+                    onClick={handleLogout}
+                    className="btn-apple-secondary"
+                    style={{ fontSize: '0.85rem', padding: '0.65rem 1.25rem' }}
+                  >
+                    <LogOut size={16} />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Vault Statistics 4-Card Grid */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+                  gap: '1rem',
+                  marginBottom: '2.5rem',
+                }}
+              >
+                <div
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.04)',
+                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    borderRadius: 'var(--radius-lg)',
+                    padding: '1.25rem',
+                  }}
+                >
+                  <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)', marginBottom: '0.5rem' }}>
+                    Total Tracks
+                  </div>
+                  <div style={{ fontSize: '2rem', fontWeight: 800 }}>{myUploadedTracks.length}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                    In your personal library
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    background: 'rgba(48, 209, 88, 0.08)',
+                    border: '1px solid rgba(48, 209, 88, 0.25)',
+                    borderRadius: 'var(--radius-lg)',
+                    padding: '1.25rem',
+                  }}
+                >
+                  <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--apple-green)', marginBottom: '0.5rem' }}>
+                    Public Tracks
+                  </div>
+                  <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--apple-green)' }}>
+                    {myUploadedTracks.filter((t) => t.visibility === 'public').length}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'rgba(48, 209, 88, 0.8)', marginTop: '0.25rem' }}>
+                    Playable by all users
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    background: 'rgba(250, 36, 60, 0.08)',
+                    border: '1px solid rgba(250, 36, 60, 0.25)',
+                    borderRadius: 'var(--radius-lg)',
+                    padding: '1.25rem',
+                  }}
+                >
+                  <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--apple-pink)', marginBottom: '0.5rem' }}>
+                    Private Tracks
+                  </div>
+                  <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--apple-pink)' }}>
+                    {myUploadedTracks.filter((t) => t.visibility === 'private').length}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'rgba(250, 36, 60, 0.8)', marginTop: '0.25rem' }}>
+                    Confidential to your account
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.04)',
+                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    borderRadius: 'var(--radius-lg)',
+                    padding: '1.25rem',
+                  }}
+                >
+                  <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)', marginBottom: '0.5rem' }}>
+                    Storage Consumed
+                  </div>
+                  <div style={{ fontSize: '2rem', fontWeight: 800 }}>
+                    {(myUploadedTracks.reduce((sum, t) => sum + (t.fileSize || 0), 0) / (1024 * 1024)).toFixed(1)} <span style={{ fontSize: '1rem', fontWeight: 600 }}>MB</span>
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                    Turso BLOB Cloud Storage
+                  </div>
+                </div>
+              </div>
+
+              {/* My Songs Privacy Manager Section */}
+              <div
+                style={{
+                  background: 'rgba(20, 20, 24, 0.65)',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  borderRadius: 'var(--radius-xl)',
+                  padding: '1.75rem',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
+                  <div>
+                    <h2 style={{ fontSize: '1.3rem', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: '0.25rem' }}>
+                      Track Privacy & Vault Library
+                    </h2>
+                    <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+                      Click on any badge below to instantly switch track visibility between Public and Private.
+                    </p>
+                  </div>
+
+                  {/* Filter tabs */}
+                  <div style={{ display: 'flex', gap: '0.4rem', background: 'rgba(255, 255, 255, 0.06)', padding: '0.25rem', borderRadius: 'var(--radius-full)' }}>
+                    <button
+                      onClick={() => setProfileSongFilter('all')}
+                      style={{
+                        background: profileSongFilter === 'all' ? 'var(--apple-pink)' : 'transparent',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: 'var(--radius-full)',
+                        padding: '0.35rem 0.85rem',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      All ({myUploadedTracks.length})
+                    </button>
+                    <button
+                      onClick={() => setProfileSongFilter('public')}
+                      style={{
+                        background: profileSongFilter === 'public' ? 'var(--apple-green)' : 'transparent',
+                        color: profileSongFilter === 'public' ? '#000000' : '#ffffff',
+                        border: 'none',
+                        borderRadius: 'var(--radius-full)',
+                        padding: '0.35rem 0.85rem',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Public ({myUploadedTracks.filter((t) => t.visibility === 'public').length})
+                    </button>
+                    <button
+                      onClick={() => setProfileSongFilter('private')}
+                      style={{
+                        background: profileSongFilter === 'private' ? 'rgba(255, 255, 255, 0.25)' : 'transparent',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: 'var(--radius-full)',
+                        padding: '0.35rem 0.85rem',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Private ({myUploadedTracks.filter((t) => t.visibility === 'private').length})
+                    </button>
+                  </div>
+                </div>
+
+                {/* Track Rows */}
+                {myUploadedTracks.filter((t) =>
+                  profileSongFilter === 'all' ? true : t.visibility === profileSongFilter
+                ).length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '3.5rem 1rem', color: 'var(--text-tertiary)' }}>
+                    <Music size={40} style={{ margin: '0 auto 1rem', opacity: 0.4 }} />
+                    <div style={{ fontSize: '1rem', fontWeight: 600, color: '#ffffff', marginBottom: '0.5rem' }}>
+                      No songs found in this category
+                    </div>
+                    <p style={{ fontSize: '0.85rem', marginBottom: '1.25rem' }}>
+                      Add music to your Vault to listen anywhere and share with community listeners.
+                    </p>
+                    <button
+                      onClick={() => setActiveTab('upload')}
+                      className="btn-apple-primary"
+                      style={{ fontSize: '0.85rem' }}
+                    >
+                      <Upload size={15} />
+                      <span>Upload Your First Song</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    {myUploadedTracks
+                      .filter((t) => (profileSongFilter === 'all' ? true : t.visibility === profileSongFilter))
+                      .map((track) => {
+                        const isCurrentPlaying = currentTrack?.id === track.id;
+                        return (
+                          <div
+                            key={track.id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '0.75rem 1rem',
+                              borderRadius: 'var(--radius-md)',
+                              background: isCurrentPlaying ? 'rgba(250, 36, 60, 0.12)' : 'rgba(255, 255, 255, 0.03)',
+                              border: isCurrentPlaying ? '1px solid rgba(250, 36, 60, 0.3)' : '1px solid rgba(255, 255, 255, 0.05)',
+                              transition: 'all 0.15s ease',
+                              gap: '1rem',
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flex: 1, overflow: 'hidden' }}>
+                              {/* Artwork + Play button overlay */}
+                              <div
+                                onClick={() => playTrack(track)}
+                                style={{
+                                  width: '2.8rem',
+                                  height: '2.8rem',
+                                  borderRadius: '0.5rem',
+                                  background: getTrackGradient(track.id),
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  cursor: 'pointer',
+                                  flexShrink: 0,
+                                  position: 'relative',
+                                  boxShadow: '0 4px 10px rgba(0, 0, 0, 0.35)',
+                                }}
+                              >
+                                {isCurrentPlaying && isPlaying ? (
+                                  <Pause size={16} fill="#ffffff" color="#ffffff" />
+                                ) : (
+                                  <Play size={16} fill="#ffffff" color="#ffffff" style={{ marginLeft: 2 }} />
+                                )}
+                              </div>
+
+                              <div style={{ overflow: 'hidden', flex: 1 }}>
+                                <div style={{
+                                  fontWeight: 600,
+                                  fontSize: '0.92rem',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                  color: isCurrentPlaying ? 'var(--apple-pink)' : '#ffffff',
+                                }}>
+                                  {track.title}
+                                </div>
+                                <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {track.artist} {track.album ? `• ${track.album}` : ''}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Details: Duration & Size */}
+                            <div className="desktop-only" style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', textAlign: 'right', minWidth: '80px' }}>
+                              <div>{formatTime(track.duration)}</div>
+                              <div>{((track.fileSize || 0) / (1024 * 1024)).toFixed(1)} MB</div>
+                            </div>
+
+                            {/* 1-Click Interactive Privacy Toggle Badge */}
+                            <button
+                              onClick={() => {
+                                const newVis = track.visibility === 'public' ? 'private' : 'public';
+                                toggleTrackVisibility(track.id, track.visibility);
+                                showToast(`Track privacy changed to ${newVis.toUpperCase()}`);
+                              }}
+                              title="Click to toggle Public / Private"
+                              style={{
+                                background: track.visibility === 'public' ? 'rgba(48, 209, 88, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                                color: track.visibility === 'public' ? 'var(--apple-green)' : 'var(--text-secondary)',
+                                border: `1px solid ${track.visibility === 'public' ? 'rgba(48, 209, 88, 0.35)' : 'rgba(255, 255, 255, 0.15)'}`,
+                                borderRadius: 'var(--radius-full)',
+                                padding: '0.4rem 0.85rem',
+                                fontSize: '0.75rem',
+                                fontWeight: 700,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.4rem',
+                                cursor: 'pointer',
+                                transition: 'all 0.15s ease',
+                                flexShrink: 0,
+                              }}
+                            >
+                              {track.visibility === 'public' ? <Globe size={13} /> : <Lock size={13} />}
+                              <span>{track.visibility === 'public' ? 'PUBLIC' : 'PRIVATE'}</span>
+                            </button>
+
+                            {/* Options & Delete */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                              <button
+                                onClick={() => setMenuTrack(track)}
+                                title="Song Options"
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: 'var(--text-secondary)',
+                                  padding: '0.4rem',
+                                  cursor: 'pointer',
+                                  borderRadius: '50%',
+                                }}
+                              >
+                                <MoreVertical size={16} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteTrack(track.id)}
+                                title="Delete Track"
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: 'var(--text-tertiary)',
+                                  padding: '0.4rem',
+                                  cursor: 'pointer',
+                                  borderRadius: '50%',
+                                }}
+                                onMouseEnter={(e) => (e.currentTarget.style.color = '#ff6b81')}
+                                onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-tertiary)')}
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </>
@@ -2140,6 +2803,43 @@ export default function WorkspacePage() {
               <Repeat size={16} />
             </button>
 
+            {/* Desktop Mini-Player Volume Slider */}
+            <div
+              className="desktop-only"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginLeft: '0.35rem', marginRight: '0.2rem' }}
+            >
+              <button
+                onClick={toggleMute}
+                title={isMuted ? 'Unmute' : 'Mute'}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: isMuted ? 'var(--apple-pink)' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  padding: '0.25rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                {isMuted || volume === 0 ? <VolumeX size={16} /> : volume < 0.5 ? <Volume1 size={16} /> : <Volume2 size={16} />}
+              </button>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={isMuted ? 0 : volume}
+                onChange={handleVolumeChange}
+                title={`Volume: ${Math.round((isMuted ? 0 : volume) * 100)}%`}
+                style={{
+                  width: '75px',
+                  height: '4px',
+                  accentColor: 'var(--apple-pink)',
+                  cursor: 'pointer',
+                }}
+              />
+            </div>
+
             {/* 3-Dots Menu button on Current Track */}
             <button
               onClick={() => setMenuTrack(currentTrack)}
@@ -2182,350 +2882,410 @@ export default function WorkspacePage() {
     </div>
   )}
 
-  {/* SOPHISTICATED COMPACT NOW PLAYING CARD MODAL */}
+  {/* MACOS APPLE MUSIC FULLSCREEN PLAYER MATCHING SCREENSHOT EXACTLY */}
   {isExpandedPlayer && currentTrack && (
     <div
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 100,
-        backgroundColor: 'rgba(0, 0, 0, 0.78)',
-        backdropFilter: 'blur(24px)',
-        WebkitBackdropFilter: 'blur(24px)',
+        zIndex: 9999,
+        backgroundColor: '#000000',
         display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: '1rem',
-        animation: 'fadeIn 0.2s ease',
-      }}
-      onClick={() => setIsExpandedPlayer(false)}
-    >
-      {/* AMBIENT RADIAL GLOW CONTAINER */}
-      <div style={{
-        position: 'absolute',
-        inset: 0,
+        padding: '2rem 1.5rem',
         overflow: 'hidden',
-        pointerEvents: 'none',
-        zIndex: 0,
-      }}>
-        <div style={{
-          position: 'absolute',
-          top: '25%',
-          left: '30%',
-          width: '320px',
-          height: '320px',
-          borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(250, 36, 60, 0.35) 0%, transparent 70%)',
-          filter: 'blur(80px)',
-          transform: isPlaying ? 'scale(1.15)' : 'scale(0.95)',
-          transition: 'transform 2s ease-in-out',
-        }} />
-      </div>
-
+        userSelect: 'none',
+        animation: 'fadeIn 0.25s ease',
+      }}
+    >
+      {/* ATMOSPHERIC GAUSSIAN BLURRED BACKDROP */}
       <div
-        onClick={(e) => e.stopPropagation()}
         style={{
-          position: 'relative',
-          zIndex: 1,
-          width: '100%',
-          maxWidth: '380px',
-          maxHeight: '92vh',
-          overflowY: 'auto',
-          borderRadius: '24px',
-          background: 'rgba(22, 22, 26, 0.95)',
-          border: '1px solid rgba(255, 255, 255, 0.12)',
-          boxShadow: '0 24px 60px rgba(0, 0, 0, 0.85), 0 0 35px rgba(250, 36, 60, 0.2)',
-          padding: '1.4rem 1.4rem 1.6rem',
-          display: 'flex',
-          flexDirection: 'column',
-        }}
-      >
-        {/* Top Collapse Navigation */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-          <button
-            onClick={() => setIsExpandedPlayer(false)}
-            title="Collapse"
-            style={{
-              background: 'rgba(255, 255, 255, 0.1)',
-              border: 'none',
-              borderRadius: '50%',
-              width: '34px',
-              height: '34px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#ffffff',
-              cursor: 'pointer',
-            }}
-          >
-            <ChevronDown size={20} />
-          </button>
-
-          <div style={{ textAlign: 'center' }}>
-            <span style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'rgba(255, 255, 255, 0.5)' }}>
-              NOW PLAYING
-            </span>
-            <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-              {currentTrack.album || 'Personal Library'}
-            </div>
-          </div>
-
-          <button
-            onClick={() => setMenuTrack(currentTrack)}
-            title="Options"
-            style={{
-              background: 'rgba(255, 255, 255, 0.1)',
-              border: 'none',
-              borderRadius: '50%',
-              width: '34px',
-              height: '34px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#ffffff',
-              cursor: 'pointer',
-            }}
-          >
-            <MoreHorizontal size={18} />
-          </button>
-        </div>
-
-        {/* Compact 3D Album Artwork Card */}
-        <div style={{
-          width: '210px',
-          height: '210px',
-          margin: '0 auto 1.25rem',
-          borderRadius: '20px',
+          position: 'absolute',
+          inset: '-20%',
           background: getTrackGradient(currentTrack.id),
+          filter: 'blur(120px) brightness(0.28) saturate(1.6)',
+          opacity: 0.9,
+          pointerEvents: 'none',
+          zIndex: 0,
+          transform: isPlaying ? 'scale(1.08)' : 'scale(1)',
+          transition: 'transform 3s ease-in-out',
+        }}
+      />
+      {/* DARK AMBIENT RADIAL VIGNETTE OVERLAY */}
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          background: 'radial-gradient(circle at center, rgba(12, 12, 16, 0.45) 0%, rgba(3, 3, 5, 0.92) 100%)',
+          pointerEvents: 'none',
+          zIndex: 1,
+        }}
+      />
+
+      {/* TOP-RIGHT CORNER CONTROLS: MINIMIZE & CLOSE */}
+      <div
+        style={{
+          position: 'absolute',
+          top: '1.75rem',
+          right: '2rem',
+          zIndex: 10,
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'center',
+          gap: '0.85rem',
+        }}
+      >
+        <button
+          onClick={() => setIsExpandedPlayer(false)}
+          title="Minimize Fullscreen"
+          style={{
+            background: 'rgba(255, 255, 255, 0.08)',
+            border: 'none',
+            borderRadius: '50%',
+            width: '32px',
+            height: '32px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'rgba(255, 255, 255, 0.75)',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = '#ffffff';
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.16)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = 'rgba(255, 255, 255, 0.75)';
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+          }}
+        >
+          <Minimize2 size={16} />
+        </button>
+        <button
+          onClick={() => setIsExpandedPlayer(false)}
+          title="Close Fullscreen"
+          style={{
+            background: 'rgba(255, 255, 255, 0.08)',
+            border: 'none',
+            borderRadius: '50%',
+            width: '32px',
+            height: '32px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'rgba(255, 255, 255, 0.75)',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = '#ffffff';
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.16)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = 'rgba(255, 255, 255, 0.75)';
+            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+          }}
+        >
+          <X size={18} />
+        </button>
+      </div>
+
+      {/* CENTER PLAYER CONTENT COLUMN */}
+      <div
+        style={{
           position: 'relative',
-          boxShadow: '0 16px 40px rgba(0, 0, 0, 0.65), 0 4px 18px var(--apple-pink-glow)',
-          overflow: 'hidden',
-          transform: isPlaying ? 'scale(1)' : 'scale(0.96)',
-          transition: 'transform 0.4s var(--ease-apple)',
-        }}>
-          <Music size={54} fill="#ffffff" color="#ffffff" />
+          zIndex: 5,
+          width: '100%',
+          maxWidth: '440px',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          textAlign: 'center',
+        }}
+      >
+        {/* ALBUM ARTWORK */}
+        <div
+          style={{
+            width: '100%',
+            maxWidth: 'min(440px, 80vw)',
+            aspectRatio: '1 / 1',
+            maxHeight: '46vh',
+            borderRadius: '14px',
+            background: getTrackGradient(currentTrack.id),
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            position: 'relative',
+            boxShadow: '0 24px 65px rgba(0, 0, 0, 0.8), 0 4px 20px rgba(0, 0, 0, 0.4)',
+            overflow: 'hidden',
+            transform: isPlaying ? 'scale(1)' : 'scale(0.96)',
+            transition: 'transform 0.4s cubic-bezier(0.25, 1, 0.5, 1)',
+          }}
+        >
+          <Music size={80} fill="#ffffff" color="#ffffff" style={{ opacity: 0.95 }} />
 
-          {/* Specular gloss reflection */}
-          <div style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            height: '40%',
-            background: 'linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, transparent 100%)',
-            pointerEvents: 'none',
-          }} />
-
-          {/* Live Equalizer Overlay */}
-          {isPlaying && (
-            <div style={{
-              position: 'absolute',
-              bottom: '10px',
-              right: '10px',
-              background: 'rgba(0, 0, 0, 0.55)',
-              backdropFilter: 'blur(8px)',
-              padding: '4px 8px',
-              borderRadius: '999px',
-              display: 'flex',
-              alignItems: 'flex-end',
-              gap: '2px',
-              height: '18px',
-            }}>
-              <div className="eq-bar" />
-              <div className="eq-bar" />
-              <div className="eq-bar" />
-              <div className="eq-bar" />
-            </div>
-          )}
-        </div>
-
-        {/* Track Info */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-          <div style={{ overflow: 'hidden', flex: 1, marginRight: '0.5rem' }}>
-            <h2 style={{ fontSize: '1.25rem', fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.2, marginBottom: '0.2rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {currentTrack.title}
-            </h2>
-            <p style={{ fontSize: '0.9rem', color: 'var(--apple-pink)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {currentTrack.artist} • By @{currentTrack.uploaderName || 'Vault'}
-            </p>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.25rem' }}>
-              <span style={{
-                fontSize: '0.58rem',
-                fontWeight: 700,
-                letterSpacing: '0.04em',
-                padding: '0.1rem 0.35rem',
-                borderRadius: '4px',
-                background: 'rgba(255, 255, 255, 0.12)',
-                color: '#ffffff',
-              }}>
-                LOSSLESS
-              </span>
-              <span style={{ fontSize: '0.68rem', color: 'rgba(255, 255, 255, 0.6)' }}>
-                Apple Master • ALAC
-              </span>
-            </div>
-          </div>
-
-          <button
-            onClick={() => setIsFavorited(!isFavorited)}
+          {/* Specular gloss highlight */}
+          <div
             style={{
-              background: isFavorited ? 'rgba(250, 36, 60, 0.2)' : 'rgba(255, 255, 255, 0.08)',
-              border: 'none',
-              borderRadius: '50%',
-              width: '36px',
-              height: '36px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              color: isFavorited ? 'var(--apple-pink)' : '#ffffff',
-              flexShrink: 0,
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: '42%',
+              background: 'linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, transparent 100%)',
+              pointerEvents: 'none',
             }}
-          >
-            <Heart size={18} fill={isFavorited ? 'var(--apple-pink)' : 'none'} />
-          </button>
+          />
         </div>
 
-        {/* Apple Scrub Timeline */}
-        <div style={{ marginBottom: '1.25rem' }}>
+        {/* SONG TITLE */}
+        <h1
+          style={{
+            fontSize: 'clamp(1.35rem, 2.5vw, 1.7rem)',
+            fontWeight: 700,
+            color: '#ffffff',
+            letterSpacing: '-0.02em',
+            lineHeight: 1.25,
+            marginTop: '1.6rem',
+            marginBottom: '0.3rem',
+            maxWidth: '100%',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {currentTrack.title}
+        </h1>
+
+        {/* ARTIST — ALBUM SUBTITLE */}
+        <div
+          style={{
+            fontSize: 'clamp(0.9rem, 1.8vw, 1.05rem)',
+            fontWeight: 400,
+            color: 'rgba(255, 255, 255, 0.65)',
+            maxWidth: '100%',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {currentTrack.artist} — {currentTrack.album || currentTrack.title}
+        </div>
+
+        {/* LOSSLESS BADGE */}
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.35rem',
+            marginTop: '0.5rem',
+            color: 'rgba(255, 255, 255, 0.55)',
+            fontSize: '0.75rem',
+            fontWeight: 500,
+            letterSpacing: '0.02em',
+          }}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2 12c2.5-6 5.5-6 8 0s5.5 6 8 0 3.5-3 4-3" />
+          </svg>
+          <span>Lossless</span>
+        </div>
+
+        {/* TIMELINE SCRUBBER */}
+        <div
+          style={{
+            width: '100%',
+            marginTop: '1.25rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.85rem',
+            color: 'rgba(255, 255, 255, 0.6)',
+            fontSize: '0.8rem',
+            fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif",
+          }}
+        >
+          <span style={{ minWidth: '34px', textAlign: 'left' }}>{formatTime(currentTime)}</span>
           <input
             type="range"
             min="0"
             max={duration || currentTrack.duration || 100}
             value={currentTime}
             onChange={handleSeek}
-            style={{ width: '100%', height: '4px' }}
-          />
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'rgba(255, 255, 255, 0.6)', marginTop: '0.35rem', fontFamily: 'var(--font-mono)' }}>
-            <span>{formatTime(currentTime)}</span>
-            <span>-{formatTime((duration || currentTrack.duration) - currentTime)}</span>
-          </div>
-        </div>
-
-        {/* Playback Controls */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: '1.25rem',
-          padding: '0 0.25rem',
-        }}>
-          <button
-            onClick={() => setIsShuffle(!isShuffle)}
-            style={{ background: 'none', border: 'none', color: isShuffle ? 'var(--apple-pink)' : 'rgba(255, 255, 255, 0.6)', cursor: 'pointer', padding: '0.4rem' }}
-          >
-            <Shuffle size={18} />
-          </button>
-
-          <button
-            onClick={playPrevTrack}
-            style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer', padding: '0.4rem' }}
-          >
-            <SkipBack size={26} fill="#ffffff" />
-          </button>
-
-          <button
-            onClick={togglePlay}
             style={{
-              width: '3.8rem',
-              height: '3.8rem',
-              borderRadius: '50%',
-              background: '#ffffff',
-              border: 'none',
-              color: '#000000',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
+              flex: 1,
+              height: '4px',
+              accentColor: '#ffffff',
               cursor: 'pointer',
-              boxShadow: '0 6px 20px rgba(255, 255, 255, 0.3)',
             }}
-          >
-            {isBuffering ? (
-              <Loader2 size={26} className="animate-spin" color="#000000" />
-            ) : isPlaying ? (
-              <Pause size={26} fill="#000000" />
-            ) : (
-              <Play size={26} fill="#000000" style={{ marginLeft: '3px' }} />
-            )}
-          </button>
-
-          <button
-            onClick={playNextTrack}
-            style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer', padding: '0.4rem' }}
-          >
-            <SkipForward size={26} fill="#ffffff" />
-          </button>
-
-          <button
-            onClick={() => setIsLooping(!isLooping)}
-            style={{ background: 'none', border: 'none', color: isLooping ? 'var(--apple-pink)' : 'rgba(255, 255, 255, 0.6)', cursor: 'pointer', padding: '0.4rem' }}
-          >
-            <Repeat size={18} />
-          </button>
-        </div>
-
-        {/* Apple Volume Slider Bar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.25rem', padding: '0 0.25rem' }}>
-          <button onClick={toggleMute} style={{ background: 'none', border: 'none', color: 'rgba(255, 255, 255, 0.6)', cursor: 'pointer' }}>
-            {isMuted || volume === 0 ? <VolumeX size={15} /> : <Volume1 size={15} />}
-          </button>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            value={isMuted ? 0 : volume}
-            onChange={handleVolumeChange}
-            style={{ flex: 1, height: '4px' }}
           />
-          <Volume2 size={15} color="rgba(255, 255, 255, 0.6)" />
+          <span style={{ minWidth: '38px', textAlign: 'right' }}>
+            -{formatTime(Math.max(0, (duration || currentTrack.duration) - currentTime))}
+          </span>
         </div>
 
-        {/* Bottom Actions Bar */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          paddingTop: '0.75rem',
-          borderTop: '1px solid rgba(255, 255, 255, 0.1)',
-        }}>
-          <button
-            onClick={() => setTrackToAddToPlaylist(currentTrack)}
-            className="btn-apple-secondary"
-            style={{ fontSize: '0.75rem', padding: '0.35rem 0.75rem' }}
-          >
-            <Plus size={14} />
-            <span>Add to Playlist</span>
-          </button>
-
-          {currentTrack.isOwner ? (
+        {/* TRANSPORT CONTROLS ROW UNDER SCRUBBER */}
+        <div
+          style={{
+            width: '100%',
+            marginTop: '1.1rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0 0.2rem',
+          }}
+        >
+          {/* LEFT GROUP: Volume speaker + volume slider + ••• */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
             <button
-              onClick={() => toggleTrackVisibility(currentTrack.id, currentTrack.visibility)}
+              onClick={toggleMute}
+              title={isMuted ? 'Unmute' : 'Mute'}
               style={{
-                background: currentTrack.visibility === 'public' ? 'rgba(48, 209, 88, 0.15)' : 'rgba(255, 255, 255, 0.08)',
-                color: currentTrack.visibility === 'public' ? 'var(--apple-green)' : 'var(--text-secondary)',
+                background: 'none',
                 border: 'none',
-                borderRadius: '999px',
-                padding: '0.35rem 0.75rem',
-                fontSize: '0.72rem',
-                fontWeight: 600,
+                color: isMuted ? 'var(--apple-pink)' : 'rgba(255, 255, 255, 0.75)',
+                cursor: 'pointer',
+                padding: '0.35rem',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '0.3rem',
+                transition: 'color 0.15s ease',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = '#ffffff')}
+              onMouseLeave={(e) =>
+                (e.currentTarget.style.color = isMuted ? 'var(--apple-pink)' : 'rgba(255, 255, 255, 0.75)')
+              }
+            >
+              {isMuted || volume === 0 ? <VolumeX size={19} /> : volume < 0.5 ? <Volume1 size={19} /> : <Volume2 size={19} />}
+            </button>
+
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={isMuted ? 0 : volume}
+              onChange={handleVolumeChange}
+              title={`Volume: ${Math.round((isMuted ? 0 : volume) * 100)}%`}
+              style={{
+                width: '64px',
+                height: '3px',
+                accentColor: '#ffffff',
                 cursor: 'pointer',
               }}
+            />
+
+            <button
+              onClick={() => setMenuTrack(currentTrack)}
+              title="More Options"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'rgba(255, 255, 255, 0.75)',
+                cursor: 'pointer',
+                padding: '0.35rem',
+                display: 'flex',
+                alignItems: 'center',
+                transition: 'color 0.15s ease',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = '#ffffff')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255, 255, 255, 0.75)')}
             >
-              {currentTrack.visibility === 'public' ? <Globe size={13} /> : <Lock size={13} />}
-              <span>{currentTrack.visibility.toUpperCase()}</span>
+              <MoreHorizontal size={20} />
             </button>
-          ) : (
-            <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>
-              By @{currentTrack.uploaderName}
-            </span>
-          )}
+          </div>
+
+          {/* CENTER GROUP: SkipBack + Play/Pause + SkipForward (crisp white glyphs) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1.4rem' }}>
+            <button
+              onClick={playPrevTrack}
+              title="Previous Track"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#ffffff',
+                cursor: 'pointer',
+                padding: '0.4rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'transform 0.15s ease, opacity 0.15s ease',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.8')}
+              onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+            >
+              <SkipBack size={26} fill="#ffffff" color="#ffffff" />
+            </button>
+
+            <button
+              onClick={togglePlay}
+              title={isPlaying ? 'Pause' : 'Play'}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#ffffff',
+                cursor: 'pointer',
+                padding: '0.4rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'transform 0.15s ease, opacity 0.15s ease',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.08)')}
+              onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+            >
+              {isBuffering ? (
+                <Loader2 size={32} className="animate-spin" color="#ffffff" />
+              ) : isPlaying ? (
+                <Pause size={34} fill="#ffffff" color="#ffffff" />
+              ) : (
+                <Play size={34} fill="#ffffff" color="#ffffff" style={{ marginLeft: '3px' }} />
+              )}
+            </button>
+
+            <button
+              onClick={playNextTrack}
+              title="Next Track"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#ffffff',
+                cursor: 'pointer',
+                padding: '0.4rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'transform 0.15s ease, opacity 0.15s ease',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.8')}
+              onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+            >
+              <SkipForward size={26} fill="#ffffff" color="#ffffff" />
+            </button>
+          </div>
+
+          {/* RIGHT GROUP: Lyrics / Quote Bubble */}
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <button
+              onClick={() => showToast('Lyrics feature synchronized with Apple Music catalog')}
+              title="Lyrics"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'rgba(255, 255, 255, 0.75)',
+                cursor: 'pointer',
+                padding: '0.35rem',
+                display: 'flex',
+                alignItems: 'center',
+                transition: 'color 0.15s ease',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = '#ffffff')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255, 255, 255, 0.75)')}
+            >
+              <MessageSquareQuote size={20} />
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -2622,163 +3382,26 @@ export default function WorkspacePage() {
           <Upload size={20} />
           <span>Add Music</span>
         </button>
-      </nav>
 
-      {/* USER PROFILE & PRIVACY MANAGER MODAL */}
-      {showProfileModal && (
-        <div style={{
-          position: 'fixed',
-          inset: 0,
-          background: 'rgba(0, 0, 0, 0.8)',
-          backdropFilter: 'blur(24px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 85,
-          padding: '1.25rem',
-        }}>
-          <div className="apple-glass" style={{
-            width: '100%',
-            maxWidth: '540px',
-            maxHeight: '85vh',
+        <button
+          onClick={() => setActiveTab('profile')}
+          style={{
+            background: 'none',
+            border: 'none',
             display: 'flex',
             flexDirection: 'column',
-            padding: '2rem',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
-                <div style={{
-                  width: '3.2rem',
-                  height: '3.2rem',
-                  borderRadius: '50%',
-                  background: 'var(--apple-gradient)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 4px 14px var(--apple-pink-glow)',
-                }}>
-                  <User size={20} color="#ffffff" />
-                </div>
-                <div>
-                  <h2 style={{ fontSize: '1.35rem', fontWeight: 800 }}>
-                    {user?.displayName || user?.username}
-                  </h2>
-                  <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-                    @{user?.username} • {user?.email}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setShowProfileModal(false)}
-                className="btn-apple-secondary"
-                style={{ padding: '0.4rem 0.8rem', fontSize: '0.8125rem' }}
-              >
-                Close
-              </button>
-            </div>
-
-            {/* Quick Stats */}
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(3, 1fr)',
-              gap: '0.75rem',
-              marginBottom: '1.5rem',
-            }}>
-              <div style={{ background: 'rgba(255, 255, 255, 0.04)', padding: '0.85rem', borderRadius: 'var(--radius-sm)', textAlign: 'center' }}>
-                <div style={{ fontSize: '1.35rem', fontWeight: 800 }}>{myUploadedTracks.length}</div>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', textTransform: 'uppercase' }}>Uploads</div>
-              </div>
-              <div style={{ background: 'rgba(48, 209, 88, 0.1)', padding: '0.85rem', borderRadius: 'var(--radius-sm)', textAlign: 'center' }}>
-                <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--apple-green)' }}>
-                  {myUploadedTracks.filter((t) => t.visibility === 'public').length}
-                </div>
-                <div style={{ fontSize: '0.7rem', color: 'var(--apple-green)', textTransform: 'uppercase' }}>Public</div>
-              </div>
-              <div style={{ background: 'rgba(250, 36, 60, 0.1)', padding: '0.85rem', borderRadius: 'var(--radius-sm)', textAlign: 'center' }}>
-                <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--apple-pink)' }}>
-                  {myUploadedTracks.filter((t) => t.visibility === 'private').length}
-                </div>
-                <div style={{ fontSize: '0.7rem', color: 'var(--apple-pink)', textTransform: 'uppercase' }}>Private</div>
-              </div>
-            </div>
-
-            {/* Song Privacy Manager */}
-            <div style={{ fontSize: '0.8125rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
-              My Songs Privacy Controls (Click to toggle Public / Private)
-            </div>
-
-            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
-              {myUploadedTracks.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-tertiary)', fontSize: '0.875rem' }}>
-                  You haven&apos;t uploaded any songs yet. Go to &ldquo;Add Music&rdquo; to upload!
-                </div>
-              ) : (
-                myUploadedTracks.map((track) => (
-                  <div
-                    key={track.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '0.65rem 0.85rem',
-                      borderRadius: 'var(--radius-sm)',
-                      background: 'rgba(255, 255, 255, 0.04)',
-                    }}
-                  >
-                    <div style={{ overflow: 'hidden', flex: 1, marginRight: '0.75rem' }}>
-                      <div style={{ fontWeight: 600, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {track.title}
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
-                        {track.artist}
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <button
-                        onClick={() => toggleTrackVisibility(track.id, track.visibility)}
-                        style={{
-                          background: track.visibility === 'public' ? 'rgba(48, 209, 88, 0.15)' : 'rgba(255, 255, 255, 0.08)',
-                          color: track.visibility === 'public' ? 'var(--apple-green)' : 'var(--text-secondary)',
-                          border: `1px solid ${track.visibility === 'public' ? 'rgba(48, 209, 88, 0.3)' : 'rgba(255, 255, 255, 0.15)'}`,
-                          borderRadius: 'var(--radius-full)',
-                          padding: '0.35rem 0.75rem',
-                          fontSize: '0.75rem',
-                          fontWeight: 600,
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.35rem',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {track.visibility === 'public' ? <Globe size={13} /> : <Lock size={13} />}
-                        <span>{track.visibility === 'public' ? 'Public (Visible to All)' : 'Private (Only Me)'}</span>
-                      </button>
-
-                      <button
-                        onClick={() => handleDeleteTrack(track.id)}
-                        title="Delete track"
-                        style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', padding: '0.35rem', cursor: 'pointer' }}
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <button
-              onClick={() => setShowProfileModal(false)}
-              className="btn-apple-primary"
-              style={{ width: '100%', justifyContent: 'center' }}
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      )}
+            alignItems: 'center',
+            gap: '0.2rem',
+            color: activeTab === 'profile' ? 'var(--apple-pink)' : 'var(--text-tertiary)',
+            cursor: 'pointer',
+            fontSize: '0.65rem',
+            fontWeight: 600,
+          }}
+        >
+          <User size={20} />
+          <span>Profile</span>
+        </button>
+      </nav>
 
       {/* CREATE PLAYLIST MODAL */}
       {showNewPlaylistModal && (
