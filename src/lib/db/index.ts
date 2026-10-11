@@ -64,6 +64,8 @@ export async function ensureDbInitialized() {
       file_name TEXT NOT NULL,
       mime_type TEXT NOT NULL DEFAULT 'audio/mpeg',
       file_size INTEGER NOT NULL,
+      visibility TEXT NOT NULL DEFAULT 'public',
+      audio_data BLOB,
       created_at INTEGER NOT NULL
     );
   `);

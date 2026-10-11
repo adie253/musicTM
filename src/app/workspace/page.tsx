@@ -28,9 +28,12 @@ import {
   CheckCircle2,
   AlertCircle,
   Loader2,
-  Maximize2,
-  Sliders,
-  Radio,
+  Heart,
+  SlidersHorizontal,
+  Share2,
+  ListOrdered,
+  Sparkles,
+  Info,
 } from 'lucide-react';
 
 interface Track {
@@ -41,6 +44,10 @@ interface Track {
   duration: number;
   fileSize: number;
   fileName?: string;
+  visibility: 'public' | 'private';
+  isOwner?: boolean;
+  uploaderName?: string;
+  uploaderDisplayName?: string;
   createdAt: number;
 }
 
@@ -98,11 +105,16 @@ export default function WorkspacePage() {
   const [isLooping, setIsLooping] = useState(false);
   const [isShuffle, setIsShuffle] = useState(false);
   const [isExpandedPlayer, setIsExpandedPlayer] = useState(false);
+  const [isFavorited, setIsFavorited] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
+  // Profile modal state
+  const [showProfileModal, setShowProfileModal] = useState(false);
+
   // Upload state
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadVisibility, setUploadVisibility] = useState<'public' | 'private'>('public');
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -170,6 +182,34 @@ export default function WorkspacePage() {
     await fetch('/api/auth/logout', { method: 'POST' });
     router.push('/login');
     router.refresh();
+  }
+
+  // Toggle track visibility (Public <-> Private)
+  async function toggleTrackVisibility(trackId: string, currentVis: 'public' | 'private') {
+    const newVis = currentVis === 'public' ? 'private' : 'public';
+    // Optimistic update
+    setTracks((prev) =>
+      prev.map((t) => (t.id === trackId ? { ...t, visibility: newVis } : t))
+    );
+
+    try {
+      const res = await fetch('/api/tracks', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trackId, visibility: newVis }),
+      });
+      if (!res.ok) {
+        // Rollback on failure
+        setTracks((prev) =>
+          prev.map((t) => (t.id === trackId ? { ...t, visibility: currentVis } : t))
+        );
+      }
+    } catch (err) {
+      console.error('Failed to toggle visibility:', err);
+      setTracks((prev) =>
+        prev.map((t) => (t.id === trackId ? { ...t, visibility: currentVis } : t))
+      );
+    }
   }
 
   // PWA MediaSession (Native Lock Screen & Notification Center Controls)
@@ -326,6 +366,7 @@ export default function WorkspacePage() {
 
     const formData = new FormData();
     formData.append('file', uploadFile);
+    formData.append('visibility', uploadVisibility);
 
     try {
       const res = await fetch('/api/tracks/upload', {
@@ -443,8 +484,11 @@ export default function WorkspacePage() {
     (t) =>
       t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       t.artist.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (t.album && t.album.toLowerCase().includes(searchQuery.toLowerCase()))
+      (t.album && t.album.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (t.uploaderName && t.uploaderName.toLowerCase().includes(searchQuery.toLowerCase()))
   );
+
+  const myUploadedTracks = tracks.filter((t) => t.isOwner);
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: '#000000', color: '#ffffff' }}>
@@ -472,14 +516,15 @@ export default function WorkspacePage() {
         onLoadedMetadata={handleTimeUpdate}
       />
 
-      {/* DESKTOP SIDEBAR (macOS Apple Music Style) */}
+      {/* DESKTOP SIDEBAR (macOS Apple Music Style - FIXED FULL HEIGHT SO PROFILE NEVER MOVES) */}
       <aside
         className="desktop-only apple-sidebar"
         style={{
           width: '260px',
           position: 'fixed',
           top: 0,
-          bottom: currentTrack ? '100px' : 0,
+          bottom: 0,
+          height: '100vh',
           left: 0,
           zIndex: 30,
           display: 'flex',
@@ -566,7 +611,7 @@ export default function WorkspacePage() {
               }}
             >
               <Music size={18} />
-              <span>Songs ({tracks.length})</span>
+              <span>Community Songs ({tracks.length})</span>
             </button>
 
             <button
@@ -656,7 +701,7 @@ export default function WorkspacePage() {
           </div>
         </div>
 
-        {/* User Card */}
+        {/* User Profile Card (Fixed cleanly at sidebar bottom - opens Profile Modal) */}
         <div style={{
           paddingTop: '1rem',
           borderTop: '1px solid var(--border-hairline)',
@@ -664,16 +709,27 @@ export default function WorkspacePage() {
           alignItems: 'center',
           justifyContent: 'space-between',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', overflow: 'hidden' }}>
+          <div
+            onClick={() => setShowProfileModal(true)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.65rem',
+              overflow: 'hidden',
+              cursor: 'pointer',
+              flex: 1,
+            }}
+          >
             <div style={{
-              width: '2rem',
-              height: '2rem',
+              width: '2.2rem',
+              height: '2.2rem',
               borderRadius: '50%',
-              background: 'rgba(255, 255, 255, 0.12)',
+              background: 'linear-gradient(135deg, #fa243c 0%, #ff5b79 100%)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               color: '#ffffff',
+              boxShadow: '0 2px 8px var(--apple-pink-glow)',
             }}>
               <User size={14} />
             </div>
@@ -681,15 +737,15 @@ export default function WorkspacePage() {
               <div style={{ fontSize: '0.8125rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {user?.displayName || user?.username}
               </div>
-              <div style={{ fontSize: '0.6875rem', color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {user?.email}
+              <div style={{ fontSize: '0.6875rem', color: 'var(--apple-pink)', fontWeight: 500 }}>
+                Manage Profile & Privacy
               </div>
             </div>
           </div>
           <button
             onClick={handleLogout}
             title="Sign Out"
-            style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: '0.25rem' }}
+            style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: '0.35rem' }}
           >
             <LogOut size={16} />
           </button>
@@ -746,6 +802,23 @@ export default function WorkspacePage() {
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
             <button
+              onClick={() => setShowProfileModal(true)}
+              style={{
+                width: '1.9rem',
+                height: '1.9rem',
+                borderRadius: '50%',
+                background: 'var(--apple-gradient)',
+                border: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#ffffff',
+                cursor: 'pointer',
+              }}
+            >
+              <User size={13} />
+            </button>
+            <button
               onClick={() => setShowNewPlaylistModal(true)}
               style={{ background: 'none', border: 'none', color: 'var(--apple-pink)', cursor: 'pointer' }}
             >
@@ -767,7 +840,7 @@ export default function WorkspacePage() {
             <input
               type="text"
               className="apple-search-input"
-              placeholder="Artists, Songs, Lyrics, and More"
+              placeholder="Search community songs & artists"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               style={{ borderRadius: 'var(--radius-sm)', fontSize: '0.85rem' }}
@@ -805,232 +878,15 @@ export default function WorkspacePage() {
         <main style={{
           flex: 1,
           padding: '1.75rem 1.5rem',
-          paddingBottom: currentTrack ? '160px' : '90px',
+          paddingBottom: currentTrack ? '140px' : '90px',
           maxWidth: '1200px',
           margin: '0 auto',
           width: '100%',
         }}>
-          {/* TAB 1: LISTEN NOW (HOME SCREEN) */}
+          {/* TAB 1: LISTEN NOW (CLEAN HERO WITHOUT DUPLICATE "NOW STREAMING" BOX) */}
           {activeTab === 'listen' && (
             <div>
-              {/* HOME SCREEN PLAYBACK STUDIO WIDGET (When a track is active) */}
-              {currentTrack && (
-                <div className="apple-glass" style={{
-                  padding: '1.75rem',
-                  marginBottom: '2rem',
-                  border: '1px solid rgba(250, 36, 60, 0.3)',
-                  boxShadow: '0 12px 36px rgba(0, 0, 0, 0.6), 0 4px 20px var(--apple-pink-glow)',
-                  borderRadius: 'var(--radius-xl)',
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <span className="badge badge-public" style={{ fontSize: '0.68rem', padding: '0.2rem 0.55rem' }}>
-                        NOW STREAMING
-                      </span>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                        High-Fidelity Cloud Vault
-                      </span>
-                    </div>
-
-                    <button
-                      onClick={() => setIsExpandedPlayer(true)}
-                      style={{
-                        background: 'rgba(255, 255, 255, 0.08)',
-                        border: 'none',
-                        color: 'var(--text-secondary)',
-                        padding: '0.4rem 0.75rem',
-                        borderRadius: 'var(--radius-full)',
-                        fontSize: '0.75rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.35rem',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <Maximize2 size={13} />
-                      <span>Full Player</span>
-                    </button>
-                  </div>
-
-                  {/* Artwork & Details Row */}
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '1.5rem',
-                    flexWrap: 'wrap',
-                    marginBottom: '1.5rem',
-                  }}>
-                    <div style={{
-                      width: '90px',
-                      height: '90px',
-                      borderRadius: 'var(--radius-lg)',
-                      background: getTrackGradient(currentTrack.id),
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0,
-                      boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5)',
-                    }}>
-                      <Music size={40} fill="#ffffff" color="#ffffff" />
-                    </div>
-
-                    <div style={{ flex: 1, minWidth: '220px' }}>
-                      <h2 style={{ fontSize: '1.5rem', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: '0.25rem' }}>
-                        {currentTrack.title}
-                      </h2>
-                      <p style={{ fontSize: '1rem', color: 'var(--apple-pink)', fontWeight: 500, marginBottom: '0.5rem' }}>
-                        {currentTrack.artist} {currentTrack.album ? `• ${currentTrack.album}` : ''}
-                      </p>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
-                          {(currentTrack.fileSize / (1024 * 1024)).toFixed(1)} MB • Lossless
-                        </span>
-                        {isPlaying && (
-                          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '14px' }}>
-                            <div className="eq-bar" />
-                            <div className="eq-bar" />
-                            <div className="eq-bar" />
-                            <div className="eq-bar" />
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Live Timeline Scrub Slider */}
-                  <div style={{ marginBottom: '1.5rem' }}>
-                    <input
-                      type="range"
-                      min="0"
-                      max={duration || currentTrack.duration || 100}
-                      value={currentTime}
-                      onChange={handleSeek}
-                      style={{ width: '100%', height: '5px' }}
-                    />
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.4rem', fontFamily: 'var(--font-mono)' }}>
-                      <span>{formatTime(currentTime)}</span>
-                      <span>-{formatTime((duration || currentTrack.duration) - currentTime)}</span>
-                    </div>
-                  </div>
-
-                  {/* FULL PLAYBACK OPTIONS BAR ON HOME SCREEN */}
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    flexWrap: 'wrap',
-                    gap: '1rem',
-                  }}>
-                    {/* Shuffle & Loop toggles */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                      <button
-                        onClick={() => setIsShuffle(!isShuffle)}
-                        title="Shuffle"
-                        style={{
-                          background: isShuffle ? 'rgba(250, 36, 60, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-                          border: 'none',
-                          color: isShuffle ? 'var(--apple-pink)' : 'var(--text-secondary)',
-                          padding: '0.55rem',
-                          borderRadius: 'var(--radius-full)',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        <Shuffle size={17} />
-                      </button>
-
-                      <button
-                        onClick={() => setIsLooping(!isLooping)}
-                        title="Repeat"
-                        style={{
-                          background: isLooping ? 'rgba(250, 36, 60, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-                          border: 'none',
-                          color: isLooping ? 'var(--apple-pink)' : 'var(--text-secondary)',
-                          padding: '0.55rem',
-                          borderRadius: 'var(--radius-full)',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        <Repeat size={17} />
-                      </button>
-
-                      <button
-                        onClick={() => setTrackToAddToPlaylist(currentTrack)}
-                        title="Add to Playlist"
-                        style={{
-                          background: 'rgba(255, 255, 255, 0.06)',
-                          border: 'none',
-                          color: 'var(--text-secondary)',
-                          padding: '0.55rem',
-                          borderRadius: 'var(--radius-full)',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        <Plus size={17} />
-                      </button>
-                    </div>
-
-                    {/* Central Transport Buttons */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
-                      <button
-                        onClick={playPrevTrack}
-                        style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer' }}
-                      >
-                        <SkipBack size={26} fill="#ffffff" />
-                      </button>
-
-                      <button
-                        onClick={togglePlay}
-                        style={{
-                          width: '3.6rem',
-                          height: '3.6rem',
-                          borderRadius: '50%',
-                          background: '#ffffff',
-                          border: 'none',
-                          color: '#000000',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          cursor: 'pointer',
-                          boxShadow: '0 4px 18px rgba(255, 255, 255, 0.3)',
-                        }}
-                      >
-                        {isBuffering ? (
-                          <Loader2 size={24} className="animate-spin" color="#000000" />
-                        ) : isPlaying ? (
-                          <Pause size={24} fill="#000000" />
-                        ) : (
-                          <Play size={24} fill="#000000" style={{ marginLeft: '3px' }} />
-                        )}
-                      </button>
-
-                      <button
-                        onClick={playNextTrack}
-                        style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer' }}
-                      >
-                        <SkipForward size={26} fill="#ffffff" />
-                      </button>
-                    </div>
-
-                    {/* Volume Slider in Home widget */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', minWidth: '160px' }}>
-                      <button onClick={toggleMute} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-                        {isMuted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
-                      </button>
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        value={isMuted ? 0 : volume}
-                        onChange={handleVolumeChange}
-                        style={{ width: '100px', height: '4px' }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Apple Music Hero Banner */}
+              {/* Apple Music Clean Featured Hero Banner */}
               {loading ? (
                 <div className="apple-skeleton" style={{ height: '220px', borderRadius: 'var(--radius-xl)', marginBottom: '2.5rem' }} />
               ) : (
@@ -1088,10 +944,10 @@ export default function WorkspacePage() {
                 </div>
               )}
 
-              {/* Top Tracks Section */}
+              {/* Top Community Tracks Section */}
               <div style={{ marginBottom: '2.5rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-                  <h2 style={{ fontSize: '1.35rem', fontWeight: 700, letterSpacing: '-0.02em' }}>Recently Added Songs</h2>
+                  <h2 style={{ fontSize: '1.35rem', fontWeight: 700, letterSpacing: '-0.02em' }}>Community & Vault Songs</h2>
                   <button
                     onClick={() => setActiveTab('tracks')}
                     style={{ background: 'none', border: 'none', color: 'var(--apple-pink)', fontWeight: 600, fontSize: '0.875rem', cursor: 'pointer' }}
@@ -1163,7 +1019,7 @@ export default function WorkspacePage() {
                               {track.title}
                             </div>
                             <div style={{ fontSize: '0.78125rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {track.artist}
+                              {track.artist} • By {track.uploaderName || 'Vault'}
                             </div>
                           </div>
 
@@ -1246,24 +1102,36 @@ export default function WorkspacePage() {
             </div>
           )}
 
-          {/* TAB 2: SONGS / LIBRARY */}
+          {/* TAB 2: SONGS / LIBRARY (SHOWS EVERYONE'S PUBLIC SONGS + USER PRIVATE SONGS) */}
           {activeTab === 'tracks' && (
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
                 <div>
-                  <h1 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.03em' }}>Songs</h1>
-                  <p style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)' }}>{tracks.length} tracks in personal cloud</p>
+                  <h1 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.03em' }}>All Songs</h1>
+                  <p style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)' }}>
+                    {filteredTracks.length} tracks available across community vault
+                  </p>
                 </div>
-                <button
-                  onClick={() => {
-                    if (filteredTracks.length > 0) playTrack(filteredTracks[0]);
-                  }}
-                  className="btn-apple-primary"
-                  style={{ padding: '0.6rem 1.4rem' }}
-                >
-                  <Play size={16} fill="#ffffff" />
-                  <span>Play</span>
-                </button>
+                <div style={{ display: 'flex', gap: '0.75rem' }}>
+                  <button
+                    onClick={() => setShowProfileModal(true)}
+                    className="btn-apple-secondary"
+                    style={{ fontSize: '0.8125rem' }}
+                  >
+                    <SlidersHorizontal size={14} />
+                    <span>My Uploads & Privacy</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (filteredTracks.length > 0) playTrack(filteredTracks[0]);
+                    }}
+                    className="btn-apple-primary"
+                    style={{ padding: '0.6rem 1.4rem' }}
+                  >
+                    <Play size={16} fill="#ffffff" />
+                    <span>Play</span>
+                  </button>
+                </div>
               </div>
 
               {loading ? (
@@ -1306,6 +1174,7 @@ export default function WorkspacePage() {
                           borderRadius: 'var(--radius-sm)',
                         }}
                       >
+                        {/* Artwork */}
                         <div style={{
                           width: '2.75rem',
                           height: '2.75rem',
@@ -1325,6 +1194,7 @@ export default function WorkspacePage() {
                           )}
                         </div>
 
+                        {/* Title & Artist */}
                         <div style={{ flex: 1, overflow: 'hidden' }}>
                           <div style={{
                             fontWeight: 600,
@@ -1337,10 +1207,38 @@ export default function WorkspacePage() {
                             {track.title}
                           </div>
                           <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {track.artist} {track.album ? `• ${track.album}` : ''}
+                            {track.artist} • By {track.uploaderName || 'Vault'}
                           </div>
                         </div>
 
+                        {/* PUBLIC / PRIVATE TOGGLE BADGE (If user is owner) */}
+                        {track.isOwner && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleTrackVisibility(track.id, track.visibility);
+                            }}
+                            title={`Click to make ${track.visibility === 'public' ? 'Private' : 'Public'}`}
+                            style={{
+                              background: track.visibility === 'public' ? 'rgba(48, 209, 88, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                              color: track.visibility === 'public' ? 'var(--apple-green)' : 'var(--text-secondary)',
+                              border: `1px solid ${track.visibility === 'public' ? 'rgba(48, 209, 88, 0.3)' : 'rgba(255, 255, 255, 0.15)'}`,
+                              borderRadius: 'var(--radius-full)',
+                              padding: '0.2rem 0.55rem',
+                              fontSize: '0.68rem',
+                              fontWeight: 600,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.3rem',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {track.visibility === 'public' ? <Globe size={11} /> : <Lock size={11} />}
+                            <span>{track.visibility.toUpperCase()}</span>
+                          </button>
+                        )}
+
+                        {/* Equalizer Waveform */}
                         {isTrackActive && isPlaying && (
                           <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '14px', marginRight: '0.5rem' }}>
                             <div className="eq-bar" />
@@ -1349,10 +1247,12 @@ export default function WorkspacePage() {
                           </div>
                         )}
 
+                        {/* Duration */}
                         <span style={{ fontSize: '0.8125rem', color: 'var(--text-tertiary)' }}>
                           {formatTime(track.duration)}
                         </span>
 
+                        {/* Actions */}
                         <div style={{ display: 'flex', gap: '0.25rem' }} onClick={(e) => e.stopPropagation()}>
                           <button
                             onClick={() => setTrackToAddToPlaylist(track)}
@@ -1361,13 +1261,15 @@ export default function WorkspacePage() {
                           >
                             <Plus size={18} />
                           </button>
-                          <button
-                            onClick={() => handleDeleteTrack(track.id)}
-                            title="Delete"
-                            style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', padding: '0.4rem', cursor: 'pointer' }}
-                          >
-                            <Trash2 size={16} />
-                          </button>
+                          {track.isOwner && (
+                            <button
+                              onClick={() => handleDeleteTrack(track.id)}
+                              title="Delete"
+                              style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', padding: '0.4rem', cursor: 'pointer' }}
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
@@ -1583,7 +1485,7 @@ export default function WorkspacePage() {
             </div>
           )}
 
-          {/* TAB 4: ADD MUSIC (UPLOAD) */}
+          {/* TAB 4: ADD MUSIC (UPLOAD WITH VISIBILITY OPTION) */}
           {activeTab === 'upload' && (
             <div style={{ maxWidth: '520px', margin: '0 auto' }}>
               <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
@@ -1653,6 +1555,33 @@ export default function WorkspacePage() {
                   </label>
                 </div>
 
+                {/* Default Visibility Selector */}
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <label style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>
+                    Initial Privacy Setting
+                  </label>
+                  <div style={{ display: 'flex', gap: '0.75rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => setUploadVisibility('public')}
+                      className={`btn-apple-secondary ${uploadVisibility === 'public' ? 'btn-apple-primary' : ''}`}
+                      style={{ flex: 1, justifyContent: 'center' }}
+                    >
+                      <Globe size={15} />
+                      <span>Public (Everyone Can Listen)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUploadVisibility('private')}
+                      className={`btn-apple-secondary ${uploadVisibility === 'private' ? 'btn-apple-primary' : ''}`}
+                      style={{ flex: 1, justifyContent: 'center' }}
+                    >
+                      <Lock size={15} />
+                      <span>Private (Only Me)</span>
+                    </button>
+                  </div>
+                </div>
+
                 <button
                   type="submit"
                   className="btn-apple-primary"
@@ -1674,7 +1603,7 @@ export default function WorkspacePage() {
         </main>
       </div>
 
-      {/* FLOATING MINI PLAYER WITH INLINE PLAYBACK CONTROLS (Mobile & Desktop) */}
+      {/* FLOATING MINI PLAYER WITH INLINE PLAYBACK CONTROLS */}
       {currentTrack && (
         <div
           onClick={() => setIsExpandedPlayer(true)}
@@ -1689,7 +1618,7 @@ export default function WorkspacePage() {
             cursor: 'pointer',
           }}
         >
-          {/* Responsive positioning: on desktop dock right above viewport bottom */}
+          {/* Responsive positioning: on desktop dock right of sidebar */}
           <style jsx>{`
             @media (min-width: 769px) {
               div[style*="bottom: '72px'"] {
@@ -1705,7 +1634,7 @@ export default function WorkspacePage() {
             position: 'relative',
             overflow: 'hidden',
           }}>
-            {/* INLINE MINI SCRUB TIMELINE BAR AT TOP OF FLOATING PLAYER */}
+            {/* INLINE MINI SCRUB TIMELINE BAR AT TOP */}
             <div
               style={{
                 position: 'absolute',
@@ -1758,12 +1687,12 @@ export default function WorkspacePage() {
                     {currentTrack.title}
                   </div>
                   <div style={{ fontSize: '0.78125rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {currentTrack.artist}
+                    {currentTrack.artist} • By {currentTrack.uploaderName || 'Vault'}
                   </div>
                 </div>
               </div>
 
-              {/* Center/Right: Full Playback Transport Controls inside Floating Player */}
+              {/* Center/Right: Full Playback Transport Controls */}
               <div
                 style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}
                 onClick={(e) => e.stopPropagation()}
@@ -1847,166 +1776,342 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      {/* FULL-SCREEN NOW PLAYING MODAL (iOS Apple Music Style) */}
+      {/* ULTRA-SOPHISTICATED FULL-SCREEN NOW PLAYING MODAL (Apple Music Style) */}
       {isExpandedPlayer && currentTrack && (
         <div style={{
           position: 'fixed',
           inset: 0,
           zIndex: 100,
-          background: 'rgba(12, 12, 14, 0.98)',
-          backdropFilter: 'blur(50px) saturate(220%)',
-          WebkitBackdropFilter: 'blur(50px) saturate(220%)',
+          backgroundColor: '#0a0a0c',
           display: 'flex',
           flexDirection: 'column',
-          padding: '2.5rem 2rem 3rem',
+          padding: '2rem 1.5rem 2.5rem',
           overflowY: 'auto',
         }}>
-          {/* Top Collapse Handle */}
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '2rem' }}>
-            <button
-              onClick={() => setIsExpandedPlayer(false)}
-              style={{
-                background: 'rgba(255, 255, 255, 0.1)',
-                border: 'none',
-                borderRadius: '999px',
-                width: '42px',
-                height: '42px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#ffffff',
-                cursor: 'pointer',
-              }}
-            >
-              <ChevronDown size={24} />
-            </button>
-          </div>
-
-          {/* Large Centered Album Artwork */}
+          {/* DYNAMIC AMBIENT BLURRED GLOW WALLPAPER */}
           <div style={{
-            maxWidth: '380px',
-            width: '100%',
-            aspectRatio: '1 / 1',
-            margin: '0 auto 2.5rem',
-            borderRadius: 'var(--radius-xl)',
-            background: getTrackGradient(currentTrack.id),
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 24px 60px rgba(0, 0, 0, 0.7), 0 8px 30px var(--apple-pink-glow)',
+            position: 'absolute',
+            inset: 0,
+            overflow: 'hidden',
+            pointerEvents: 'none',
+            zIndex: 0,
           }}>
-            <Music size={80} fill="#ffffff" color="#ffffff" />
+            <div style={{
+              position: 'absolute',
+              top: '10%',
+              left: '15%',
+              width: '450px',
+              height: '450px',
+              borderRadius: '50%',
+              background: 'radial-gradient(circle, rgba(250, 36, 60, 0.45) 0%, transparent 70%)',
+              filter: 'blur(90px)',
+              transform: isPlaying ? 'scale(1.15)' : 'scale(0.95)',
+              transition: 'transform 2s ease-in-out',
+            }} />
+            <div style={{
+              position: 'absolute',
+              bottom: '20%',
+              right: '15%',
+              width: '400px',
+              height: '400px',
+              borderRadius: '50%',
+              background: 'radial-gradient(circle, rgba(98, 54, 255, 0.4) 0%, transparent 70%)',
+              filter: 'blur(90px)',
+              transform: isPlaying ? 'scale(1.1)' : 'scale(0.9)',
+              transition: 'transform 2.5s ease-in-out',
+            }} />
           </div>
 
-          {/* Track Info */}
-          <div style={{ maxWidth: '420px', width: '100%', margin: '0 auto 1.5rem', textAlign: 'left' }}>
-            <h2 style={{ fontSize: '1.65rem', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: '0.25rem' }}>
-              {currentTrack.title}
-            </h2>
-            <p style={{ fontSize: '1.1rem', color: 'var(--apple-pink)', fontWeight: 500 }}>
-              {currentTrack.artist}
-            </p>
-          </div>
+          <div style={{ position: 'relative', zIndex: 1, maxWidth: '540px', margin: '0 auto', width: '100%' }}>
+            {/* Top Collapse Navigation */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <button
+                onClick={() => setIsExpandedPlayer(false)}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.12)',
+                  border: 'none',
+                  borderRadius: '999px',
+                  width: '38px',
+                  height: '38px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#ffffff',
+                  cursor: 'pointer',
+                  backdropFilter: 'blur(20px)',
+                }}
+              >
+                <ChevronDown size={22} />
+              </button>
 
-          {/* Scrub Timeline */}
-          <div style={{ maxWidth: '420px', width: '100%', margin: '0 auto 2rem' }}>
-            <input
-              type="range"
-              min="0"
-              max={duration || currentTrack.duration || 100}
-              value={currentTime}
-              onChange={handleSeek}
-              style={{ width: '100%', height: '6px' }}
-            />
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem', color: 'var(--text-tertiary)', marginTop: '0.5rem', fontFamily: 'var(--font-mono)' }}>
-              <span>{formatTime(currentTime)}</span>
-              <span>-{formatTime((duration || currentTrack.duration) - currentTime)}</span>
+              <div style={{ textAlign: 'center' }}>
+                <span style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'rgba(255, 255, 255, 0.5)' }}>
+                  PLAYING FROM VAULT
+                </span>
+                <div style={{ fontSize: '0.8125rem', fontWeight: 600 }}>
+                  {currentTrack.album || 'Personal Library'}
+                </div>
+              </div>
+
+              <button
+                onClick={() => setTrackToAddToPlaylist(currentTrack)}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.12)',
+                  border: 'none',
+                  borderRadius: '999px',
+                  width: '38px',
+                  height: '38px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#ffffff',
+                  cursor: 'pointer',
+                  backdropFilter: 'blur(20px)',
+                }}
+              >
+                <Plus size={18} />
+              </button>
             </div>
-          </div>
 
-          {/* Playback Controls (Shuffle, Prev, Play/Pause, Next, Repeat) */}
-          <div style={{
-            maxWidth: '380px',
-            width: '100%',
-            margin: '0 auto 2.5rem',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}>
-            <button
-              onClick={() => setIsShuffle(!isShuffle)}
-              style={{ background: 'none', border: 'none', color: isShuffle ? 'var(--apple-pink)' : 'var(--text-secondary)', cursor: 'pointer', padding: '0.5rem' }}
-            >
-              <Shuffle size={22} />
-            </button>
+            {/* Large 3D Album Artwork Card with Gloss Sheen */}
+            <div style={{
+              width: '100%',
+              aspectRatio: '1 / 1',
+              maxWidth: '360px',
+              margin: '0 auto 2rem',
+              borderRadius: '26px',
+              background: getTrackGradient(currentTrack.id),
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              position: 'relative',
+              boxShadow: '0 26px 70px rgba(0, 0, 0, 0.75), 0 8px 32px var(--apple-pink-glow)',
+              overflow: 'hidden',
+              transform: isPlaying ? 'scale(1)' : 'scale(0.94)',
+              transition: 'transform 0.4s var(--ease-apple)',
+            }}>
+              <Music size={86} fill="#ffffff" color="#ffffff" />
 
-            <button
-              onClick={playPrevTrack}
-              style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer', padding: '0.5rem' }}
-            >
-              <SkipBack size={32} fill="#ffffff" />
-            </button>
+              {/* Glossy top specular reflection */}
+              <div style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                height: '40%',
+                background: 'linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, transparent 100%)',
+                pointerEvents: 'none',
+              }} />
 
-            <button
-              onClick={togglePlay}
-              style={{
-                width: '4.5rem',
-                height: '4.5rem',
-                borderRadius: '50%',
-                background: '#ffffff',
-                border: 'none',
-                color: '#000000',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                boxShadow: '0 8px 24px rgba(255, 255, 255, 0.25)',
-              }}
-            >
-              {isBuffering ? (
-                <Loader2 size={32} className="animate-spin" color="#000000" />
-              ) : isPlaying ? (
-                <Pause size={32} fill="#000000" />
-              ) : (
-                <Play size={32} fill="#000000" style={{ marginLeft: '4px' }} />
+              {/* Live Equalizer Overlay in corner */}
+              {isPlaying && (
+                <div style={{
+                  position: 'absolute',
+                  bottom: '16px',
+                  right: '16px',
+                  background: 'rgba(0, 0, 0, 0.5)',
+                  backdropFilter: 'blur(10px)',
+                  padding: '6px 10px',
+                  borderRadius: '999px',
+                  display: 'flex',
+                  alignItems: 'flex-end',
+                  gap: '2px',
+                  height: '24px',
+                }}>
+                  <div className="eq-bar" />
+                  <div className="eq-bar" />
+                  <div className="eq-bar" />
+                  <div className="eq-bar" />
+                </div>
               )}
-            </button>
+            </div>
 
-            <button
-              onClick={playNextTrack}
-              style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer', padding: '0.5rem' }}
-            >
-              <SkipForward size={32} fill="#ffffff" />
-            </button>
+            {/* Track Info with Heart & Lossless Badge */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
+              <div style={{ overflow: 'hidden' }}>
+                <h1 style={{ fontSize: '1.65rem', fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1.2, marginBottom: '0.25rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {currentTrack.title}
+                </h1>
+                <p style={{ fontSize: '1.05rem', color: 'var(--apple-pink)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {currentTrack.artist} • By {currentTrack.uploaderName || 'Vault'}
+                </p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.35rem' }}>
+                  <span style={{
+                    fontSize: '0.62rem',
+                    fontWeight: 700,
+                    letterSpacing: '0.04em',
+                    padding: '0.15rem 0.45rem',
+                    borderRadius: '4px',
+                    background: 'rgba(255, 255, 255, 0.12)',
+                    color: '#ffffff',
+                  }}>
+                    LOSSLESS
+                  </span>
+                  <span style={{ fontSize: '0.72rem', color: 'rgba(255, 255, 255, 0.6)' }}>
+                    Apple Master • 24-bit / 48kHz ALAC
+                  </span>
+                </div>
+              </div>
 
-            <button
-              onClick={() => setIsLooping(!isLooping)}
-              style={{ background: 'none', border: 'none', color: isLooping ? 'var(--apple-pink)' : 'var(--text-secondary)', cursor: 'pointer', padding: '0.5rem' }}
-            >
-              <Repeat size={22} />
-            </button>
-          </div>
+              <button
+                onClick={() => setIsFavorited(!isFavorited)}
+                style={{
+                  background: isFavorited ? 'rgba(250, 36, 60, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+                  border: 'none',
+                  borderRadius: '50%',
+                  width: '42px',
+                  height: '42px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  color: isFavorited ? 'var(--apple-pink)' : '#ffffff',
+                }}
+              >
+                <Heart size={20} fill={isFavorited ? 'var(--apple-pink)' : 'none'} />
+              </button>
+            </div>
 
-          {/* Volume Slider */}
-          <div style={{ maxWidth: '340px', width: '100%', margin: '0 auto', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <button onClick={toggleMute} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer' }}>
-              {isMuted || volume === 0 ? <VolumeX size={20} /> : <Volume1 size={20} />}
-            </button>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={isMuted ? 0 : volume}
-              onChange={handleVolumeChange}
-              style={{ flex: 1, height: '4px' }}
-            />
-            <Volume2 size={20} color="var(--text-tertiary)" />
+            {/* Apple Scrub Timeline */}
+            <div style={{ marginBottom: '1.75rem' }}>
+              <input
+                type="range"
+                min="0"
+                max={duration || currentTrack.duration || 100}
+                value={currentTime}
+                onChange={handleSeek}
+                style={{ width: '100%', height: '5px' }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: 'rgba(255, 255, 255, 0.6)', marginTop: '0.45rem', fontFamily: 'var(--font-mono)' }}>
+                <span>{formatTime(currentTime)}</span>
+                <span>-{formatTime((duration || currentTrack.duration) - currentTime)}</span>
+              </div>
+            </div>
+
+            {/* Sophisticated Transport Playback Controls */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '2rem',
+              padding: '0 0.5rem',
+            }}>
+              <button
+                onClick={() => setIsShuffle(!isShuffle)}
+                style={{ background: 'none', border: 'none', color: isShuffle ? 'var(--apple-pink)' : 'rgba(255, 255, 255, 0.6)', cursor: 'pointer', padding: '0.5rem' }}
+              >
+                <Shuffle size={24} />
+              </button>
+
+              <button
+                onClick={playPrevTrack}
+                style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer', padding: '0.5rem' }}
+              >
+                <SkipBack size={34} fill="#ffffff" />
+              </button>
+
+              <button
+                onClick={togglePlay}
+                style={{
+                  width: '4.8rem',
+                  height: '4.8rem',
+                  borderRadius: '50%',
+                  background: '#ffffff',
+                  border: 'none',
+                  color: '#000000',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  boxShadow: '0 10px 28px rgba(255, 255, 255, 0.3)',
+                }}
+              >
+                {isBuffering ? (
+                  <Loader2 size={34} className="animate-spin" color="#000000" />
+                ) : isPlaying ? (
+                  <Pause size={34} fill="#000000" />
+                ) : (
+                  <Play size={34} fill="#000000" style={{ marginLeft: '4px' }} />
+                )}
+              </button>
+
+              <button
+                onClick={playNextTrack}
+                style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer', padding: '0.5rem' }}
+              >
+                <SkipForward size={34} fill="#ffffff" />
+              </button>
+
+              <button
+                onClick={() => setIsLooping(!isLooping)}
+                style={{ background: 'none', border: 'none', color: isLooping ? 'var(--apple-pink)' : 'rgba(255, 255, 255, 0.6)', cursor: 'pointer', padding: '0.5rem' }}
+              >
+                <Repeat size={24} />
+              </button>
+            </div>
+
+            {/* Apple Volume Slider Bar */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.75rem', padding: '0 0.5rem' }}>
+              <button onClick={toggleMute} style={{ background: 'none', border: 'none', color: 'rgba(255, 255, 255, 0.6)', cursor: 'pointer' }}>
+                {isMuted || volume === 0 ? <VolumeX size={18} /> : <Volume1 size={18} />}
+              </button>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={isMuted ? 0 : volume}
+                onChange={handleVolumeChange}
+                style={{ flex: 1, height: '4px' }}
+              />
+              <Volume2 size={18} color="rgba(255, 255, 255, 0.6)" />
+            </div>
+
+            {/* Bottom Apple Action Icons */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-around',
+              paddingTop: '1rem',
+              borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+            }}>
+              <button
+                onClick={() => setTrackToAddToPlaylist(currentTrack)}
+                style={{ background: 'none', border: 'none', color: 'rgba(255, 255, 255, 0.7)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.2rem', fontSize: '0.7rem' }}
+              >
+                <Plus size={20} />
+                <span>Add</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  if (currentTrack.isOwner) {
+                    toggleTrackVisibility(currentTrack.id, currentTrack.visibility);
+                  }
+                }}
+                disabled={!currentTrack.isOwner}
+                style={{ background: 'none', border: 'none', color: currentTrack.visibility === 'public' ? 'var(--apple-green)' : 'rgba(255, 255, 255, 0.7)', cursor: currentTrack.isOwner ? 'pointer' : 'default', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.2rem', fontSize: '0.7rem' }}
+              >
+                {currentTrack.visibility === 'public' ? <Globe size={20} /> : <Lock size={20} />}
+                <span>{currentTrack.visibility.toUpperCase()}</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(window.location.origin);
+                  alert('Vault URL copied to clipboard!');
+                }}
+                style={{ background: 'none', border: 'none', color: 'rgba(255, 255, 255, 0.7)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.2rem', fontSize: '0.7rem' }}
+              >
+                <Share2 size={20} />
+                <span>Share</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* MOBILE BOTTOM TAB BAR (iOS Apple Music Style) */}
+      {/* MOBILE BOTTOM TAB BAR */}
       <nav className="mobile-only" style={{
         position: 'fixed',
         bottom: 0,
@@ -2057,7 +2162,7 @@ export default function WorkspacePage() {
           }}
         >
           <Music size={20} />
-          <span>Library</span>
+          <span>Songs</span>
         </button>
 
         <button
@@ -2098,6 +2203,162 @@ export default function WorkspacePage() {
           <span>Add Music</span>
         </button>
       </nav>
+
+      {/* USER PROFILE & PRIVACY MANAGER MODAL */}
+      {showProfileModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0, 0, 0, 0.8)',
+          backdropFilter: 'blur(24px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 85,
+          padding: '1.25rem',
+        }}>
+          <div className="apple-glass" style={{
+            width: '100%',
+            maxWidth: '540px',
+            maxHeight: '85vh',
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '2rem',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+                <div style={{
+                  width: '3.2rem',
+                  height: '3.2rem',
+                  borderRadius: '50%',
+                  background: 'var(--apple-gradient)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 4px 14px var(--apple-pink-glow)',
+                }}>
+                  <User size={20} color="#ffffff" />
+                </div>
+                <div>
+                  <h2 style={{ fontSize: '1.35rem', fontWeight: 800 }}>
+                    {user?.displayName || user?.username}
+                  </h2>
+                  <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+                    @{user?.username} • {user?.email}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setShowProfileModal(false)}
+                className="btn-apple-secondary"
+                style={{ padding: '0.4rem 0.8rem', fontSize: '0.8125rem' }}
+              >
+                Close
+              </button>
+            </div>
+
+            {/* Quick Stats */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: '0.75rem',
+              marginBottom: '1.5rem',
+            }}>
+              <div style={{ background: 'rgba(255, 255, 255, 0.04)', padding: '0.85rem', borderRadius: 'var(--radius-sm)', textAlign: 'center' }}>
+                <div style={{ fontSize: '1.35rem', fontWeight: 800 }}>{myUploadedTracks.length}</div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', textTransform: 'uppercase' }}>Uploads</div>
+              </div>
+              <div style={{ background: 'rgba(48, 209, 88, 0.1)', padding: '0.85rem', borderRadius: 'var(--radius-sm)', textAlign: 'center' }}>
+                <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--apple-green)' }}>
+                  {myUploadedTracks.filter((t) => t.visibility === 'public').length}
+                </div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--apple-green)', textTransform: 'uppercase' }}>Public</div>
+              </div>
+              <div style={{ background: 'rgba(250, 36, 60, 0.1)', padding: '0.85rem', borderRadius: 'var(--radius-sm)', textAlign: 'center' }}>
+                <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--apple-pink)' }}>
+                  {myUploadedTracks.filter((t) => t.visibility === 'private').length}
+                </div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--apple-pink)', textTransform: 'uppercase' }}>Private</div>
+              </div>
+            </div>
+
+            {/* Song Privacy Manager */}
+            <div style={{ fontSize: '0.8125rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
+              My Songs Privacy Controls (Click to toggle Public / Private)
+            </div>
+
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
+              {myUploadedTracks.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-tertiary)', fontSize: '0.875rem' }}>
+                  You haven&apos;t uploaded any songs yet. Go to &ldquo;Add Music&rdquo; to upload!
+                </div>
+              ) : (
+                myUploadedTracks.map((track) => (
+                  <div
+                    key={track.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '0.65rem 0.85rem',
+                      borderRadius: 'var(--radius-sm)',
+                      background: 'rgba(255, 255, 255, 0.04)',
+                    }}
+                  >
+                    <div style={{ overflow: 'hidden', flex: 1, marginRight: '0.75rem' }}>
+                      <div style={{ fontWeight: 600, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {track.title}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                        {track.artist}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <button
+                        onClick={() => toggleTrackVisibility(track.id, track.visibility)}
+                        style={{
+                          background: track.visibility === 'public' ? 'rgba(48, 209, 88, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                          color: track.visibility === 'public' ? 'var(--apple-green)' : 'var(--text-secondary)',
+                          border: `1px solid ${track.visibility === 'public' ? 'rgba(48, 209, 88, 0.3)' : 'rgba(255, 255, 255, 0.15)'}`,
+                          borderRadius: 'var(--radius-full)',
+                          padding: '0.35rem 0.75rem',
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.35rem',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {track.visibility === 'public' ? <Globe size={13} /> : <Lock size={13} />}
+                        <span>{track.visibility === 'public' ? 'Public (Visible to All)' : 'Private (Only Me)'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleDeleteTrack(track.id)}
+                        title="Delete track"
+                        style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', padding: '0.35rem', cursor: 'pointer' }}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <button
+              onClick={() => setShowProfileModal(false)}
+              className="btn-apple-primary"
+              style={{ width: '100%', justifyContent: 'center' }}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* CREATE PLAYLIST MODAL */}
       {showNewPlaylistModal && (

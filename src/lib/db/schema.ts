@@ -21,6 +21,7 @@ export const tracks = sqliteTable('tracks', {
   fileName: text('file_name').notNull(),
   mimeType: text('mime_type').notNull().default('audio/mpeg'),
   fileSize: integer('file_size').notNull(),
+  visibility: text('visibility', { enum: ['private', 'public'] }).notNull().default('public'),
   audioData: blob('audio_data', { mode: 'buffer' }),
   createdAt: integer('created_at').notNull(),
 });

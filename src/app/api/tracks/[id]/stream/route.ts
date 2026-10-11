@@ -28,6 +28,7 @@ export async function GET(
         filePath: tracks.filePath,
         mimeType: tracks.mimeType,
         fileSize: tracks.fileSize,
+        visibility: tracks.visibility,
       })
       .from(tracks)
       .where(eq(tracks.id, id))
@@ -40,7 +41,7 @@ export async function GET(
     const track = foundTrack[0];
 
     // Access control
-    let hasAccess = track.userId === session.userId;
+    let hasAccess = track.userId === session.userId || track.visibility === 'public';
     if (!hasAccess) {
       const publicRefs = await db
         .select({ playlistId: playlistTracks.playlistId })

@@ -91,6 +91,7 @@ export async function POST(req: NextRequest) {
       console.warn('Local disk write skipped in serverless environment:', diskErr);
     }
 
+    const visibility = (formData.get('visibility') as string) === 'private' ? 'private' : 'public';
     const now = Date.now();
     await db.insert(tracks).values({
       id: trackId,
@@ -103,6 +104,7 @@ export async function POST(req: NextRequest) {
       fileName: originalName,
       mimeType: file.type || 'audio/mpeg',
       fileSize,
+      visibility,
       audioData: buffer,
       createdAt: now,
     });
