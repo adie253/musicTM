@@ -20,6 +20,7 @@ const dbUrl = process.env.DATABASE_URL || `file:${path.join(dataDir, 'vault.db')
 
 const client = createClient({
   url: dbUrl,
+  authToken: process.env.DATABASE_AUTH_TOKEN,
 });
 
 export const db = drizzle(client, { schema });

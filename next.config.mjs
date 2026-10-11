@@ -2,6 +2,12 @@
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  experimental: {
+    middlewareClientMaxBodySize: '250mb',
+    serverActions: {
+      bodySizeLimit: '250mb',
+    },
+  },
   async headers() {
     return [
       {
