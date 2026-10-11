@@ -80,6 +80,15 @@ interface Playlist {
   createdAt: number;
 }
 
+interface UploadQueueItem {
+  id: string;
+  file: File;
+  status: 'idle' | 'uploading' | 'completed' | 'error';
+  progress: number;
+  bytesUploaded?: number;
+  errorMessage?: string;
+}
+
 const ARTWORK_GRADIENTS = [
   'linear-gradient(135deg, #fa243c 0%, #ff5b79 100%)',
   'linear-gradient(135deg, #6236ff 0%, #fa243c 100%)',
@@ -129,8 +138,8 @@ export default function WorkspacePage() {
   // Profile view & song filter state
   const [profileSongFilter, setProfileSongFilter] = useState<'all' | 'public' | 'private'>('all');
 
-  // Multi-file upload state
-  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  // Multi-file upload queue state with individual per-song progress tracking
+  const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
   const [uploadVisibility, setUploadVisibility] = useState<'public' | 'private'>('public');
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{
@@ -428,60 +437,126 @@ export default function WorkspacePage() {
     playTrack(tracks[prevIndex]);
   }
 
-  // Batch Multi-File Upload handler (Sequential to prevent Vercel 4.5MB request payload limit)
+  // Batch Multi-File Upload handler with per-song progress tracking via XMLHttpRequest
   async function handleUpload(e: React.FormEvent) {
     e.preventDefault();
-    if (uploadFiles.length === 0) return;
+    const itemsToUpload = uploadQueue.filter((item) => item.status !== 'completed');
+    if (itemsToUpload.length === 0) return;
 
     setUploading(true);
     setUploadStatus(null);
 
     let successCount = 0;
     let failCount = 0;
-    const total = uploadFiles.length;
+    const total = itemsToUpload.length;
 
     for (let i = 0; i < total; i++) {
-      const currentF = uploadFiles[i];
+      const currentItem = itemsToUpload[i];
+
+      // Mark current track as uploading
+      setUploadQueue((prev) =>
+        prev.map((item) =>
+          item.id === currentItem.id ? { ...item, status: 'uploading', progress: 0, errorMessage: undefined } : item
+        )
+      );
+
       setUploadProgress({
         current: i + 1,
         total,
-        currentFileName: currentF.name,
-        percent: Math.round(((i + 1) / total) * 100),
+        currentFileName: currentItem.file.name,
+        percent: Math.round((i / total) * 100),
       });
 
-      const formData = new FormData();
-      formData.append('file', currentF);
-      formData.append('visibility', uploadVisibility);
+      // Stream upload via XMLHttpRequest to get accurate, real-time byte progress per song
+      const uploadResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+        const xhr = new XMLHttpRequest();
+        const formData = new FormData();
+        formData.append('file', currentItem.file);
+        formData.append('visibility', uploadVisibility);
 
-      try {
-        const res = await fetch('/api/tracks/upload', {
-          method: 'POST',
-          body: formData,
-        });
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && event.total > 0) {
+            const percent = Math.min(99, Math.round((event.loaded / event.total) * 100));
+            setUploadQueue((prev) =>
+              prev.map((item) =>
+                item.id === currentItem.id
+                  ? { ...item, progress: percent, bytesUploaded: event.loaded }
+                  : item
+              )
+            );
+          }
+        };
 
-        if (res.ok) {
-          successCount++;
-        } else {
-          failCount++;
-        }
-      } catch {
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve({ success: true });
+          } else {
+            let errorMsg = `Upload failed (${xhr.status})`;
+            try {
+              const res = JSON.parse(xhr.responseText);
+              if (res.error) errorMsg = res.error;
+            } catch {
+              // fallback
+            }
+            resolve({ success: false, error: errorMsg });
+          }
+        };
+
+        xhr.onerror = () => {
+          resolve({ success: false, error: 'Network connection error' });
+        };
+
+        xhr.ontimeout = () => {
+          resolve({ success: false, error: 'Upload request timed out' });
+        };
+
+        xhr.open('POST', '/api/tracks/upload');
+        xhr.send(formData);
+      });
+
+      if (uploadResult.success) {
+        successCount++;
+        setUploadQueue((prev) =>
+          prev.map((item) =>
+            item.id === currentItem.id
+              ? { ...item, status: 'completed', progress: 100, bytesUploaded: currentItem.file.size }
+              : item
+          )
+        );
+      } else {
         failCount++;
+        setUploadQueue((prev) =>
+          prev.map((item) =>
+            item.id === currentItem.id
+              ? { ...item, status: 'error', errorMessage: uploadResult.error || 'Upload failed' }
+              : item
+          )
+        );
       }
+
+      setUploadProgress({
+        current: i + 1,
+        total,
+        currentFileName: currentItem.file.name,
+        percent: Math.round(((i + 1) / total) * 100),
+      });
     }
 
     setUploading(false);
     setUploadProgress(null);
 
     if (successCount > 0) {
-      setUploadFiles([]);
       await loadTracks();
       setUploadStatus({
         type: 'success',
         message: `Successfully added ${successCount} track${successCount > 1 ? 's' : ''} to your Vault!${failCount > 0 ? ` (${failCount} failed)` : ''}`,
       });
-      setTimeout(() => {
-        setActiveTab('tracks');
-      }, 1000);
+      if (failCount === 0) {
+        setTimeout(() => {
+          setUploadQueue([]);
+          setActiveTab('tracks');
+        }, 1200);
+      }
     } else {
       setUploadStatus({
         type: 'error',
@@ -496,15 +571,22 @@ export default function WorkspacePage() {
       const ext = f.name.substring(f.name.lastIndexOf('.')).toLowerCase();
       return ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac'].includes(ext) || f.type.startsWith('audio/');
     });
-    setUploadFiles((prev) => {
-      const existing = new Set(prev.map((f) => `${f.name}-${f.size}`));
-      const newItems = valid.filter((f) => !existing.has(`${f.name}-${f.size}`));
+    setUploadQueue((prev) => {
+      const existing = new Set(prev.map((item) => `${item.file.name}-${item.file.size}`));
+      const newItems: UploadQueueItem[] = valid
+        .filter((f) => !existing.has(`${f.name}-${f.size}`))
+        .map((f, idx) => ({
+          id: `${f.name}-${f.size}-${Date.now()}-${idx}`,
+          file: f,
+          status: 'idle',
+          progress: 0,
+        }));
       return [...prev, ...newItems];
     });
   }
 
-  function removeUploadFile(index: number) {
-    setUploadFiles((prev) => prev.filter((_, i) => i !== index));
+  function removeUploadItem(id: string) {
+    setUploadQueue((prev) => prev.filter((item) => item.id !== id));
   }
 
   // Playlist handlers
@@ -2047,7 +2129,7 @@ export default function WorkspacePage() {
                   style={{
                     border: '2px dashed rgba(255, 255, 255, 0.18)',
                     borderRadius: 'var(--radius-xl)',
-                    padding: uploadFiles.length > 0 ? '1.5rem 1.25rem' : '3rem 1.5rem',
+                    padding: uploadQueue.length > 0 ? '1.5rem 1.25rem' : '3rem 1.5rem',
                     textAlign: 'center',
                     background: 'rgba(28, 28, 30, 0.45)',
                     marginBottom: '1.5rem',
@@ -2082,7 +2164,7 @@ export default function WorkspacePage() {
                       <Upload size={26} />
                     </div>
                     <div style={{ fontWeight: 700, fontSize: '1.05rem', marginBottom: '0.35rem' }}>
-                      {uploadFiles.length === 0 ? 'Choose Multiple Audio Files or Drop Here' : 'Add More Audio Files'}
+                      {uploadQueue.length === 0 ? 'Choose Multiple Audio Files or Drop Here' : 'Add More Audio Files'}
                     </div>
                     <p style={{ fontSize: '0.8125rem', color: 'var(--text-tertiary)' }}>
                       Supports MP3, WAV, FLAC, M4A, AAC • Select multiple tracks at once
@@ -2090,8 +2172,8 @@ export default function WorkspacePage() {
                   </label>
                 </div>
 
-                {/* Selected Files Batch Queue List */}
-                {uploadFiles.length > 0 && (
+                {/* Selected Files Batch Queue List with Individual Per-Song Progress */}
+                {uploadQueue.length > 0 && (
                   <div style={{
                     background: 'rgba(255, 255, 255, 0.03)',
                     border: '1px solid rgba(255, 255, 255, 0.08)',
@@ -2103,17 +2185,17 @@ export default function WorkspacePage() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <Music size={16} color="var(--apple-pink)" />
                         <span style={{ fontSize: '0.875rem', fontWeight: 700 }}>
-                          Selected Queue ({uploadFiles.length} Tracks)
+                          Upload Queue ({uploadQueue.length} Tracks)
                         </span>
                         <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>
-                          • {(uploadFiles.reduce((acc, f) => acc + f.size, 0) / (1024 * 1024)).toFixed(1)} MB total
+                          • {(uploadQueue.reduce((acc, item) => acc + item.file.size, 0) / (1024 * 1024)).toFixed(1)} MB total
                         </span>
                       </div>
 
                       {!uploading && (
                         <button
                           type="button"
-                          onClick={() => setUploadFiles([])}
+                          onClick={() => setUploadQueue([])}
                           style={{
                             background: 'none',
                             border: 'none',
@@ -2131,54 +2213,187 @@ export default function WorkspacePage() {
                       )}
                     </div>
 
-                    <div style={{ maxHeight: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                      {uploadFiles.map((f, idx) => (
-                        <div
-                          key={`${f.name}-${f.size}-${idx}`}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            padding: '0.55rem 0.75rem',
-                            borderRadius: 'var(--radius-sm)',
-                            background: 'rgba(255, 255, 255, 0.04)',
-                            fontSize: '0.8125rem',
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', overflow: 'hidden', flex: 1, marginRight: '0.5rem' }}>
-                            <FileAudio size={16} color="var(--apple-pink)" style={{ flexShrink: 0 }} />
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500 }}>
-                              {f.name}
-                            </span>
-                          </div>
+                    <div style={{ maxHeight: '280px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.55rem', paddingRight: '0.2rem' }}>
+                      {uploadQueue.map((item) => {
+                        const isThisUploading = item.status === 'uploading';
+                        const isCompleted = item.status === 'completed';
+                        const isError = item.status === 'error';
+                        const isIdle = item.status === 'idle';
 
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
-                              {(f.size / (1024 * 1024)).toFixed(1)} MB
-                            </span>
-                            {!uploading && (
-                              <button
-                                type="button"
-                                onClick={() => removeUploadFile(idx)}
-                                title="Remove track"
+                        return (
+                          <div
+                            key={item.id}
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '0.45rem',
+                              padding: '0.75rem 0.85rem',
+                              borderRadius: 'var(--radius-sm)',
+                              background: isThisUploading
+                                ? 'rgba(250, 36, 60, 0.08)'
+                                : isCompleted
+                                ? 'rgba(48, 209, 88, 0.08)'
+                                : isError
+                                ? 'rgba(255, 69, 58, 0.08)'
+                                : 'rgba(255, 255, 255, 0.04)',
+                              border: isThisUploading
+                                ? '1px solid rgba(250, 36, 60, 0.35)'
+                                : isCompleted
+                                ? '1px solid rgba(48, 209, 88, 0.3)'
+                                : isError
+                                ? '1px solid rgba(255, 69, 58, 0.3)'
+                                : '1px solid rgba(255, 255, 255, 0.06)',
+                              transition: 'all 0.2s ease',
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+                              {/* Left: Status icon & Track metadata */}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', overflow: 'hidden', flex: 1, minWidth: 0 }}>
+                                {isThisUploading && (
+                                  <Loader2 size={17} className="animate-spin" color="var(--apple-pink)" style={{ flexShrink: 0 }} />
+                                )}
+                                {isCompleted && (
+                                  <CheckCircle2 size={17} color="#30d158" style={{ flexShrink: 0 }} />
+                                )}
+                                {isError && (
+                                  <AlertCircle size={17} color="#ff453a" style={{ flexShrink: 0 }} />
+                                )}
+                                {isIdle && (
+                                  <FileAudio size={17} color="var(--apple-pink)" style={{ flexShrink: 0 }} />
+                                )}
+
+                                <div style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                                  <span
+                                    style={{
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                      fontWeight: 600,
+                                      fontSize: '0.84rem',
+                                      color: '#ffffff',
+                                    }}
+                                    title={item.file.name}
+                                  >
+                                    {item.file.name}
+                                  </span>
+                                  <span style={{ fontSize: '0.72rem', color: isError ? '#ff8080' : isCompleted ? '#30d158' : 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
+                                    {isThisUploading && (
+                                      <>Streaming {item.progress}% • {((item.bytesUploaded || 0) / (1024 * 1024)).toFixed(1)} / {(item.file.size / (1024 * 1024)).toFixed(1)} MB</>
+                                    )}
+                                    {isCompleted && (
+                                      <>Uploaded successfully • {(item.file.size / (1024 * 1024)).toFixed(1)} MB</>
+                                    )}
+                                    {isError && (
+                                      <>{item.errorMessage || 'Failed to process audio'}</>
+                                    )}
+                                    {isIdle && (
+                                      <>Queued • {(item.file.size / (1024 * 1024)).toFixed(1)} MB</>
+                                    )}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Right: Status Pill Badge or Remove Button */}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexShrink: 0 }}>
+                                {isThisUploading && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.75rem',
+                                      fontWeight: 700,
+                                      color: '#ffffff',
+                                      background: 'var(--apple-pink)',
+                                      padding: '0.2rem 0.55rem',
+                                      borderRadius: '999px',
+                                      boxShadow: '0 2px 8px rgba(250, 36, 60, 0.4)',
+                                    }}
+                                  >
+                                    {item.progress}%
+                                  </span>
+                                )}
+
+                                {isCompleted && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.72rem',
+                                      fontWeight: 700,
+                                      color: '#30d158',
+                                      background: 'rgba(48, 209, 88, 0.15)',
+                                      padding: '0.2rem 0.55rem',
+                                      borderRadius: '999px',
+                                      border: '1px solid rgba(48, 209, 88, 0.3)',
+                                    }}
+                                  >
+                                    Done
+                                  </span>
+                                )}
+
+                                {isError && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.72rem',
+                                      fontWeight: 700,
+                                      color: '#ff453a',
+                                      background: 'rgba(255, 69, 58, 0.15)',
+                                      padding: '0.2rem 0.55rem',
+                                      borderRadius: '999px',
+                                      border: '1px solid rgba(255, 69, 58, 0.3)',
+                                    }}
+                                  >
+                                    Failed
+                                  </span>
+                                )}
+
+                                {isIdle && !uploading && (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeUploadItem(item.id)}
+                                    title="Remove track"
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      color: 'var(--text-tertiary)',
+                                      cursor: 'pointer',
+                                      padding: '0.2rem',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                    }}
+                                    onMouseEnter={(e) => (e.currentTarget.style.color = '#ff6b81')}
+                                    onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-tertiary)')}
+                                  >
+                                    <X size={15} />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Individual Song Progress Bar */}
+                            <div
+                              style={{
+                                height: '4px',
+                                background: 'rgba(255, 255, 255, 0.08)',
+                                borderRadius: '999px',
+                                overflow: 'hidden',
+                                width: '100%',
+                              }}
+                            >
+                              <div
                                 style={{
-                                  background: 'none',
-                                  border: 'none',
-                                  color: 'var(--text-tertiary)',
-                                  cursor: 'pointer',
-                                  padding: '0.15rem',
-                                  display: 'flex',
-                                  alignItems: 'center',
+                                  height: '100%',
+                                  width: `${item.status === 'completed' ? 100 : item.status === 'error' ? 100 : item.progress}%`,
+                                  background:
+                                    item.status === 'completed'
+                                      ? '#30d158'
+                                      : item.status === 'error'
+                                      ? '#ff453a'
+                                      : 'var(--apple-gradient)',
+                                  borderRadius: '999px',
+                                  transition: 'width 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
                                 }}
-                                onMouseEnter={(e) => (e.currentTarget.style.color = '#ff6b81')}
-                                onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-tertiary)')}
-                              >
-                                <X size={15} />
-                              </button>
-                            )}
+                              />
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -2194,46 +2409,78 @@ export default function WorkspacePage() {
                       disabled={uploading}
                       onClick={() => setUploadVisibility('public')}
                       className={`btn-apple-secondary ${uploadVisibility === 'public' ? 'btn-apple-primary' : ''}`}
-                      style={{ flex: 1, justifyContent: 'center' }}
+                      style={{
+                        flex: 1,
+                        justifyContent: 'center',
+                        color: '#ffffff',
+                        fontWeight: 600,
+                        border: uploadVisibility === 'public' ? '1px solid rgba(250, 36, 60, 0.4)' : '1px solid rgba(255, 255, 255, 0.1)',
+                      }}
                     >
-                      <Globe size={15} />
-                      <span>Public (Everyone Can Listen)</span>
+                      <Globe size={15} color="#ffffff" />
+                      <span style={{ color: '#ffffff' }}>Public (Everyone Can Listen)</span>
                     </button>
                     <button
                       type="button"
                       disabled={uploading}
                       onClick={() => setUploadVisibility('private')}
                       className={`btn-apple-secondary ${uploadVisibility === 'private' ? 'btn-apple-primary' : ''}`}
-                      style={{ flex: 1, justifyContent: 'center' }}
+                      style={{
+                        flex: 1,
+                        justifyContent: 'center',
+                        color: '#ffffff',
+                        fontWeight: 600,
+                        border: uploadVisibility === 'private' ? '1px solid rgba(250, 36, 60, 0.4)' : '1px solid rgba(255, 255, 255, 0.1)',
+                      }}
                     >
-                      <Lock size={15} />
-                      <span>Private (Only Me)</span>
+                      <Lock size={15} color="#ffffff" />
+                      <span style={{ color: '#ffffff' }}>Private (Only Me)</span>
                     </button>
                   </div>
                 </div>
 
-                <button
-                  type="submit"
-                  className="btn-apple-primary"
-                  disabled={uploadFiles.length === 0 || uploading}
-                  style={{
-                    width: '100%',
-                    padding: '0.9rem',
-                    fontSize: '1rem',
-                    justifyContent: 'center',
-                    opacity: uploadFiles.length === 0 || uploading ? 0.6 : 1,
-                    cursor: uploadFiles.length === 0 || uploading ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  {uploading ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <Loader2 size={18} className="animate-spin" />
-                      <span>Uploading {uploadFiles.length} Songs to Cloud Vault...</span>
-                    </div>
-                  ) : (
-                    `Upload ${uploadFiles.length > 0 ? `${uploadFiles.length} ` : ''}Song${uploadFiles.length === 1 ? '' : 's'}`
-                  )}
-                </button>
+                {/* Upload Button */}
+                {(() => {
+                  const pendingCount = uploadQueue.filter((item) => item.status !== 'completed').length;
+                  const isFinished = uploadQueue.length > 0 && pendingCount === 0;
+
+                  return (
+                    <button
+                      type="submit"
+                      className="btn-apple-primary"
+                      disabled={uploadQueue.length === 0 || pendingCount === 0 || uploading}
+                      style={{
+                        width: '100%',
+                        padding: '0.95rem',
+                        fontSize: '1rem',
+                        fontWeight: 700,
+                        justifyContent: 'center',
+                        color: '#ffffff',
+                        opacity: uploadQueue.length === 0 || (isFinished && !uploading) ? 0.7 : 1,
+                        cursor: uploadQueue.length === 0 || isFinished || uploading ? 'not-allowed' : 'pointer',
+                        boxShadow: uploadQueue.length > 0 && !isFinished ? '0 6px 24px var(--apple-pink-glow)' : 'none',
+                      }}
+                    >
+                      {uploading ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#ffffff' }}>
+                          <Loader2 size={18} className="animate-spin" color="#ffffff" />
+                          <span style={{ color: '#ffffff', fontWeight: 700 }}>
+                            Uploading Track {uploadProgress?.current || 1} of {uploadProgress?.total || uploadQueue.length}...
+                          </span>
+                        </div>
+                      ) : isFinished ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#ffffff' }}>
+                          <CheckCircle2 size={18} color="#30d158" />
+                          <span style={{ color: '#ffffff', fontWeight: 700 }}>All Tracks Successfully Uploaded!</span>
+                        </div>
+                      ) : (
+                        <span style={{ color: '#ffffff', fontWeight: 700 }}>
+                          Upload {pendingCount > 0 ? `${pendingCount} ` : ''}Song{pendingCount === 1 ? '' : 's'} to Vault
+                        </span>
+                      )}
+                    </button>
+                  );
+                })()}
               </form>
             </div>
           )}

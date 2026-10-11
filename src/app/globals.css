@@ -86,7 +86,7 @@ body {
 /* Buttons */
 .btn-apple-primary {
   background: var(--apple-gradient);
-  color: #ffffff;
+  color: #ffffff !important;
   font-weight: 600;
   font-size: 0.875rem;
   border-radius: var(--radius-full);
@@ -100,18 +100,24 @@ body {
   box-shadow: 0 4px 16px var(--apple-pink-glow);
 }
 
-.btn-apple-primary:hover {
+.btn-apple-primary:hover:not(:disabled) {
   transform: scale(1.02);
   box-shadow: 0 6px 22px rgba(250, 36, 60, 0.5);
 }
 
-.btn-apple-primary:active {
+.btn-apple-primary:active:not(:disabled) {
   transform: scale(0.98);
+}
+
+.btn-apple-primary:disabled {
+  color: #ffffff !important;
+  opacity: 0.8;
+  cursor: not-allowed;
 }
 
 .btn-apple-secondary {
   background: rgba(255, 255, 255, 0.08);
-  color: var(--text-white);
+  color: #ffffff !important;
   font-weight: 500;
   font-size: 0.875rem;
   border-radius: var(--radius-full);
@@ -124,12 +130,21 @@ body {
   transition: all 0.15s var(--ease-apple);
 }
 
-.btn-apple-secondary:hover {
+.btn-apple-secondary:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.14);
 }
 
-.btn-apple-secondary:active {
+.btn-apple-secondary:active:not(:disabled) {
   transform: scale(0.97);
+}
+
+.btn-apple-secondary:disabled {
+  color: rgba(255, 255, 255, 0.5) !important;
+  cursor: not-allowed;
+}
+
+button:disabled {
+  color: #ffffff;
 }
 
 .btn-apple-icon {
