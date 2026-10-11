@@ -69,13 +69,19 @@ export async function POST(req: NextRequest) {
       console.warn('Metadata parsing warning (using fallback filename):', metaErr);
     }
 
-    // Save to disk
+    // Save to disk (fallback to /tmp in serverless environment)
     const trackId = crypto.randomUUID();
     const storedFileName = `${trackId}${ext}`;
-    const uploadsDir = path.resolve(process.cwd(), 'data', 'uploads');
+    const uploadsDir =
+      process.env.STORAGE_DIR ||
+      (process.env.VERCEL ? '/tmp/uploads' : path.resolve(process.cwd(), 'data', 'uploads'));
 
-    if (!fs.existsSync(uploadsDir)) {
-      fs.mkdirSync(uploadsDir, { recursive: true });
+    try {
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+    } catch (e) {
+      console.warn('Directory check warning:', e);
     }
 
     const diskPath = path.join(uploadsDir, storedFileName);

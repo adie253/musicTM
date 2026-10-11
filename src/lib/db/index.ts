@@ -4,19 +4,29 @@ import { createClient } from '@libsql/client';
 import { drizzle } from 'drizzle-orm/libsql';
 import * as schema from './schema';
 
-// Ensure data and uploads directories exist
-const dataDir = path.resolve(process.cwd(), 'data');
-const uploadsDir = path.resolve(dataDir, 'uploads');
+// Determine database connection URL
+const isCloudUrl =
+  process.env.DATABASE_URL?.startsWith('libsql://') ||
+  process.env.DATABASE_URL?.startsWith('https://');
 
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+let dbUrl = process.env.DATABASE_URL;
+
+if (!dbUrl) {
+  // Local fallback: use /tmp in serverless or ./data in local development
+  const baseDir = process.env.VERCEL
+    ? '/tmp'
+    : path.resolve(process.cwd(), 'data');
+
+  try {
+    if (!fs.existsSync(baseDir)) {
+      fs.mkdirSync(baseDir, { recursive: true });
+    }
+  } catch {
+    // Ignore read-only errors in serverless
+  }
+
+  dbUrl = `file:${path.join(baseDir, 'vault.db').replace(/\\/g, '/')}`;
 }
-
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-const dbUrl = process.env.DATABASE_URL || `file:${path.join(dataDir, 'vault.db').replace(/\\/g, '/')}`;
 
 const client = createClient({
   url: dbUrl,
