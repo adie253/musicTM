@@ -143,6 +143,76 @@ export async function POST(
   }
 }
 
+// Update playlist (visibility, name, description)
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    await ensureDbInitialized();
+    const session = await getSession();
+
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { id } = await params;
+    const body = await req.json();
+    const { name, description, visibility } = body;
+
+    // Verify ownership
+    const found = await db
+      .select()
+      .from(playlists)
+      .where(eq(playlists.id, id))
+      .limit(1);
+
+    if (found.length === 0) {
+      return NextResponse.json({ error: 'Playlist not found' }, { status: 404 });
+    }
+
+    if (found[0].userId !== session.userId) {
+      return NextResponse.json({ error: 'Only playlist owner can modify it' }, { status: 403 });
+    }
+
+    const updateData: {
+      name?: string;
+      description?: string;
+      visibility?: 'private' | 'public';
+      updatedAt: number;
+    } = {
+      updatedAt: Date.now(),
+    };
+
+    if (typeof name === 'string' && name.trim()) {
+      updateData.name = name.trim();
+    }
+    if (typeof description === 'string') {
+      updateData.description = description.trim();
+    }
+    if (visibility === 'public' || visibility === 'private') {
+      updateData.visibility = visibility;
+    }
+
+    await db
+      .update(playlists)
+      .set(updateData)
+      .where(eq(playlists.id, id));
+
+    return NextResponse.json({
+      success: true,
+      message: 'Playlist updated successfully',
+      playlist: {
+        id,
+        visibility: updateData.visibility || found[0].visibility,
+      },
+    });
+  } catch (error) {
+    console.error('Update playlist error:', error);
+    return NextResponse.json({ error: 'Failed to update playlist' }, { status: 500 });
+  }
+}
+
 // Delete playlist or remove track from playlist
 export async function DELETE(
   req: NextRequest,

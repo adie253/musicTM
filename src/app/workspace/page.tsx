@@ -135,8 +135,13 @@ export default function WorkspacePage() {
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Profile view & song filter state
+  // Profile view & privacy filter state
+  const [profileActiveTab, setProfileActiveTab] = useState<'tracks' | 'playlists'>('tracks');
   const [profileSongFilter, setProfileSongFilter] = useState<'all' | 'public' | 'private'>('all');
+  const [profilePlaylistFilter, setProfilePlaylistFilter] = useState<'all' | 'public' | 'private'>('all');
+
+  // Playlists tab filter
+  const [playlistTabFilter, setPlaylistTabFilter] = useState<'all' | 'my' | 'public'>('all');
 
   // Multi-file upload queue state with individual per-song progress tracking
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
@@ -632,6 +637,63 @@ export default function WorkspacePage() {
       console.error('Fetch playlist detail error:', err);
     } finally {
       setPlaylistLoading(false);
+    }
+  }
+
+  // Toggle playlist visibility (Public <-> Private)
+  async function togglePlaylistVisibility(playlistId: string, currentVis: 'public' | 'private') {
+    const newVis = currentVis === 'public' ? 'private' : 'public';
+    // Optimistic update
+    setPlaylists((prev) =>
+      prev.map((p) => (p.id === playlistId ? { ...p, visibility: newVis } : p))
+    );
+    if (selectedPlaylist && selectedPlaylist.id === playlistId) {
+      setSelectedPlaylist((prev) => (prev ? { ...prev, visibility: newVis } : null));
+    }
+
+    try {
+      const res = await fetch(`/api/playlists/${playlistId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visibility: newVis }),
+      });
+      if (!res.ok) {
+        // Rollback
+        setPlaylists((prev) =>
+          prev.map((p) => (p.id === playlistId ? { ...p, visibility: currentVis } : p))
+        );
+        if (selectedPlaylist && selectedPlaylist.id === playlistId) {
+          setSelectedPlaylist((prev) => (prev ? { ...prev, visibility: currentVis } : null));
+        }
+        showToast('Failed to update playlist visibility');
+      } else {
+        showToast(`Playlist privacy updated to ${newVis.toUpperCase()}`);
+      }
+    } catch (err) {
+      console.error('Failed to toggle playlist visibility:', err);
+      setPlaylists((prev) =>
+        prev.map((p) => (p.id === playlistId ? { ...p, visibility: currentVis } : p))
+      );
+      if (selectedPlaylist && selectedPlaylist.id === playlistId) {
+        setSelectedPlaylist((prev) => (prev ? { ...prev, visibility: currentVis } : null));
+      }
+      showToast('Error updating playlist visibility');
+    }
+  }
+
+  async function handleDeletePlaylist(playlistId: string) {
+    if (!confirm('Are you sure you want to delete this playlist?')) return;
+    try {
+      const res = await fetch(`/api/playlists/${playlistId}`, { method: 'DELETE' });
+      if (res.ok) {
+        if (selectedPlaylist?.id === playlistId) {
+          setSelectedPlaylist(null);
+        }
+        await loadPlaylists();
+        showToast('Playlist deleted');
+      }
+    } catch (err) {
+      console.error('Delete playlist error:', err);
     }
   }
 
@@ -1870,37 +1932,88 @@ export default function WorkspacePage() {
                     </div>
 
                     <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem' }}>
                         <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--apple-pink)' }}>
                           PLAYLIST
                         </span>
-                        <span style={{
-                          fontSize: '0.65rem',
-                          fontWeight: 600,
-                          padding: '0.15rem 0.5rem',
-                          borderRadius: '999px',
-                          background: selectedPlaylist.visibility === 'public' ? 'rgba(48, 209, 88, 0.15)' : 'rgba(255, 255, 255, 0.08)',
-                          color: selectedPlaylist.visibility === 'public' ? 'var(--apple-green)' : 'var(--text-secondary)',
-                        }}>
-                          {selectedPlaylist.visibility.toUpperCase()}
-                        </span>
+                        {selectedPlaylist.isOwner ? (
+                          <button
+                            type="button"
+                            onClick={() => togglePlaylistVisibility(selectedPlaylist.id, selectedPlaylist.visibility)}
+                            title={`Click to switch playlist privacy to ${selectedPlaylist.visibility === 'public' ? 'PRIVATE' : 'PUBLIC'}`}
+                            style={{
+                              fontSize: '0.7rem',
+                              fontWeight: 700,
+                              padding: '0.2rem 0.65rem',
+                              borderRadius: '999px',
+                              background: selectedPlaylist.visibility === 'public' ? 'rgba(48, 209, 88, 0.18)' : 'rgba(255, 255, 255, 0.08)',
+                              color: selectedPlaylist.visibility === 'public' ? 'var(--apple-green)' : 'var(--text-secondary)',
+                              border: `1px solid ${selectedPlaylist.visibility === 'public' ? 'rgba(48, 209, 88, 0.4)' : 'rgba(255, 255, 255, 0.15)'}`,
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              transition: 'all 0.15s ease',
+                            }}
+                          >
+                            {selectedPlaylist.visibility === 'public' ? <Globe size={13} /> : <Lock size={13} />}
+                            <span>{selectedPlaylist.visibility.toUpperCase()}</span>
+                            <span style={{ opacity: 0.7, fontSize: '0.62rem' }}>(Click to Toggle)</span>
+                          </button>
+                        ) : (
+                          <span style={{
+                            fontSize: '0.65rem',
+                            fontWeight: 600,
+                            padding: '0.15rem 0.5rem',
+                            borderRadius: '999px',
+                            background: selectedPlaylist.visibility === 'public' ? 'rgba(48, 209, 88, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                            color: selectedPlaylist.visibility === 'public' ? 'var(--apple-green)' : 'var(--text-secondary)',
+                          }}>
+                            {selectedPlaylist.visibility.toUpperCase()}
+                          </span>
+                        )}
                       </div>
                       <h1 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: '0.35rem' }}>
                         {selectedPlaylist.name}
                       </h1>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.75rem' }}>
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.85rem' }}>
                         {selectedPlaylist.description || `Created by ${selectedPlaylist.creatorName || 'You'}`} • {playlistTracks.length} Songs
                       </p>
-                      <button
-                        onClick={() => {
-                          if (playlistTracks.length > 0) playTrack(playlistTracks[0]);
-                        }}
-                        className="btn-apple-primary"
-                        style={{ padding: '0.55rem 1.4rem' }}
-                      >
-                        <Play size={16} fill="#ffffff" />
-                        <span>Play</span>
-                      </button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                        <button
+                          onClick={() => {
+                            if (playlistTracks.length > 0) playTrack(playlistTracks[0]);
+                          }}
+                          className="btn-apple-primary"
+                          style={{ padding: '0.55rem 1.4rem' }}
+                        >
+                          <Play size={16} fill="#ffffff" />
+                          <span>Play</span>
+                        </button>
+                        {selectedPlaylist.isOwner && (
+                          <button
+                            type="button"
+                            onClick={() => togglePlaylistVisibility(selectedPlaylist.id, selectedPlaylist.visibility)}
+                            className="btn-apple-secondary"
+                            style={{ padding: '0.55rem 1rem', fontSize: '0.85rem', color: '#ffffff' }}
+                            title={`Make playlist ${selectedPlaylist.visibility === 'public' ? 'Private' : 'Public'}`}
+                          >
+                            {selectedPlaylist.visibility === 'public' ? <Lock size={15} /> : <Globe size={15} />}
+                            <span>Make {selectedPlaylist.visibility === 'public' ? 'Private' : 'Public'}</span>
+                          </button>
+                        )}
+                        {selectedPlaylist.isOwner && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePlaylist(selectedPlaylist.id)}
+                            className="btn-apple-secondary"
+                            style={{ padding: '0.55rem 0.85rem', color: '#ff453a' }}
+                            title="Delete Playlist"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -1992,7 +2105,7 @@ export default function WorkspacePage() {
                 </div>
               ) : (
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1.5rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
                     <div>
                       <h1 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.03em' }}>Playlists</h1>
                       <p style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)' }}>{playlists.length} playlists available</p>
@@ -2003,6 +2116,55 @@ export default function WorkspacePage() {
                     >
                       <Plus size={16} />
                       <span>New Playlist</span>
+                    </button>
+                  </div>
+
+                  {/* Playlists Filter Tabs */}
+                  <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => setPlaylistTabFilter('all')}
+                      style={{
+                        background: playlistTabFilter === 'all' ? 'var(--apple-pink)' : 'rgba(255, 255, 255, 0.06)',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: 'var(--radius-full)',
+                        padding: '0.4rem 0.9rem',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      All ({playlists.length})
+                    </button>
+                    <button
+                      onClick={() => setPlaylistTabFilter('my')}
+                      style={{
+                        background: playlistTabFilter === 'my' ? 'var(--apple-pink)' : 'rgba(255, 255, 255, 0.06)',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: 'var(--radius-full)',
+                        padding: '0.4rem 0.9rem',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      My Playlists ({playlists.filter((p) => p.isOwner).length})
+                    </button>
+                    <button
+                      onClick={() => setPlaylistTabFilter('public')}
+                      style={{
+                        background: playlistTabFilter === 'public' ? 'var(--apple-green)' : 'rgba(255, 255, 255, 0.06)',
+                        color: playlistTabFilter === 'public' ? '#000000' : '#ffffff',
+                        border: 'none',
+                        borderRadius: 'var(--radius-full)',
+                        padding: '0.4rem 0.9rem',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Community Public ({playlists.filter((p) => !p.isOwner && p.visibility === 'public').length})
                     </button>
                   </div>
 
@@ -2017,35 +2179,116 @@ export default function WorkspacePage() {
                       ))}
                     </div>
                   ) : (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1.25rem' }}>
-                      {playlists.map((pl) => (
-                        <div
-                          key={pl.id}
-                          onClick={() => handleViewPlaylist(pl)}
-                          style={{ cursor: 'pointer' }}
-                        >
-                          <div style={{
-                            width: '100%',
-                            aspectRatio: '1 / 1',
-                            borderRadius: 'var(--radius-lg)',
-                            background: getTrackGradient(pl.id),
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            marginBottom: '0.75rem',
-                            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
-                          }}>
-                            <FolderLock size={44} color="#ffffff" />
+                    (() => {
+                      const displayedPlaylists = playlists.filter((pl) => {
+                        if (playlistTabFilter === 'my') return pl.isOwner;
+                        if (playlistTabFilter === 'public') return !pl.isOwner && pl.visibility === 'public';
+                        return true;
+                      });
+
+                      if (displayedPlaylists.length === 0) {
+                        return (
+                          <div style={{ textAlign: 'center', padding: '4rem 1rem', color: 'var(--text-tertiary)' }}>
+                            <FolderLock size={44} style={{ margin: '0 auto 1rem', opacity: 0.3 }} />
+                            <div style={{ fontSize: '1.1rem', fontWeight: 600, color: '#ffffff', marginBottom: '0.4rem' }}>
+                              No playlists found
+                            </div>
+                            <p style={{ fontSize: '0.85rem', marginBottom: '1.25rem' }}>
+                              Create a new public or private playlist to organize your favorite music.
+                            </p>
+                            <button
+                              onClick={() => setShowNewPlaylistModal(true)}
+                              className="btn-apple-primary"
+                              style={{ margin: '0 auto' }}
+                            >
+                              <Plus size={16} />
+                              <span>Create Playlist</span>
+                            </button>
                           </div>
-                          <div style={{ fontWeight: 600, fontSize: '0.9375rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {pl.name}
-                          </div>
-                          <div style={{ fontSize: '0.78125rem', color: 'var(--text-tertiary)' }}>
-                            {pl.trackCount} Songs • {pl.visibility}
-                          </div>
+                        );
+                      }
+
+                      return (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: '1.25rem' }}>
+                          {displayedPlaylists.map((pl) => (
+                            <div
+                              key={pl.id}
+                              onClick={() => handleViewPlaylist(pl)}
+                              style={{
+                                cursor: 'pointer',
+                                background: 'rgba(255, 255, 255, 0.02)',
+                                border: '1px solid rgba(255, 255, 255, 0.05)',
+                                borderRadius: 'var(--radius-lg)',
+                                padding: '0.85rem',
+                                transition: 'all 0.2s ease',
+                              }}
+                            >
+                              <div style={{
+                                width: '100%',
+                                aspectRatio: '1 / 1',
+                                borderRadius: 'var(--radius-md)',
+                                background: getTrackGradient(pl.id),
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                marginBottom: '0.75rem',
+                                boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
+                              }}>
+                                <FolderLock size={44} color="#ffffff" />
+                              </div>
+                              <div style={{ fontWeight: 600, fontSize: '0.9375rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '0.35rem' }}>
+                                {pl.name}
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                                <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                                  {pl.trackCount} Song{pl.trackCount === 1 ? '' : 's'}
+                                </span>
+                                {pl.isOwner ? (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      togglePlaylistVisibility(pl.id, pl.visibility);
+                                    }}
+                                    title={`Click to switch to ${pl.visibility === 'public' ? 'Private' : 'Public'}`}
+                                    style={{
+                                      background: pl.visibility === 'public' ? 'rgba(48, 209, 88, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                                      color: pl.visibility === 'public' ? 'var(--apple-green)' : 'var(--text-secondary)',
+                                      border: `1px solid ${pl.visibility === 'public' ? 'rgba(48, 209, 88, 0.35)' : 'rgba(255, 255, 255, 0.12)'}`,
+                                      borderRadius: '999px',
+                                      padding: '0.15rem 0.5rem',
+                                      fontSize: '0.68rem',
+                                      fontWeight: 700,
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '0.25rem',
+                                      transition: 'all 0.15s ease',
+                                    }}
+                                  >
+                                    {pl.visibility === 'public' ? <Globe size={11} /> : <Lock size={11} />}
+                                    <span>{pl.visibility.toUpperCase()}</span>
+                                  </button>
+                                ) : (
+                                  <span
+                                    style={{
+                                      background: 'rgba(48, 209, 88, 0.12)',
+                                      color: 'var(--apple-green)',
+                                      borderRadius: '999px',
+                                      padding: '0.15rem 0.45rem',
+                                      fontSize: '0.65rem',
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    PUBLIC
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
+                      );
+                    })()
                   )}
                 </div>
               )}
@@ -2569,13 +2812,13 @@ export default function WorkspacePage() {
                 </div>
               </div>
 
-              {/* Vault Statistics 4-Card Grid */}
+              {/* Vault Statistics 5-Card Grid */}
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
                   gap: '1rem',
-                  marginBottom: '2.5rem',
+                  marginBottom: '2rem',
                 }}
               >
                 <div
@@ -2591,7 +2834,7 @@ export default function WorkspacePage() {
                   </div>
                   <div style={{ fontSize: '2rem', fontWeight: 800 }}>{myUploadedTracks.length}</div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                    In your personal library
+                    In your vault
                   </div>
                 </div>
 
@@ -2610,7 +2853,7 @@ export default function WorkspacePage() {
                     {myUploadedTracks.filter((t) => t.visibility === 'public').length}
                   </div>
                   <div style={{ fontSize: '0.75rem', color: 'rgba(48, 209, 88, 0.8)', marginTop: '0.25rem' }}>
-                    Playable by all users
+                    Playable by all
                   </div>
                 </div>
 
@@ -2629,7 +2872,7 @@ export default function WorkspacePage() {
                     {myUploadedTracks.filter((t) => t.visibility === 'private').length}
                   </div>
                   <div style={{ fontSize: '0.75rem', color: 'rgba(250, 36, 60, 0.8)', marginTop: '0.25rem' }}>
-                    Confidential to your account
+                    Only you
                   </div>
                 </div>
 
@@ -2642,18 +2885,37 @@ export default function WorkspacePage() {
                   }}
                 >
                   <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)', marginBottom: '0.5rem' }}>
-                    Storage Consumed
+                    My Playlists
                   </div>
                   <div style={{ fontSize: '2rem', fontWeight: 800 }}>
-                    {(myUploadedTracks.reduce((sum, t) => sum + (t.fileSize || 0), 0) / (1024 * 1024)).toFixed(1)} <span style={{ fontSize: '1rem', fontWeight: 600 }}>MB</span>
+                    {playlists.filter((p) => p.isOwner).length}
                   </div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                    Turso BLOB Cloud Storage
+                    {playlists.filter((p) => p.isOwner && p.visibility === 'public').length} Public • {playlists.filter((p) => p.isOwner && p.visibility === 'private').length} Private
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.04)',
+                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    borderRadius: 'var(--radius-lg)',
+                    padding: '1.25rem',
+                  }}
+                >
+                  <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)', marginBottom: '0.5rem' }}>
+                    Storage
+                  </div>
+                  <div style={{ fontSize: '2rem', fontWeight: 800 }}>
+                    {(myUploadedTracks.reduce((sum, t) => sum + (t.fileSize || 0), 0) / (1024 * 1024)).toFixed(1)} <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>MB</span>
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                    Turso BLOBs
                   </div>
                 </div>
               </div>
 
-              {/* My Songs Privacy Manager Section */}
+              {/* Privacy Manager Section with Tracks & Playlists switcher */}
               <div
                 style={{
                   background: 'rgba(20, 20, 24, 0.65)',
@@ -2662,203 +2924,433 @@ export default function WorkspacePage() {
                   padding: '1.75rem',
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
-                  <div>
-                    <h2 style={{ fontSize: '1.3rem', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: '0.25rem' }}>
-                      Track Privacy & Vault Library
-                    </h2>
-                    <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-                      Click on any badge below to instantly switch track visibility between Public and Private.
-                    </p>
-                  </div>
-
-                  {/* Filter tabs */}
-                  <div style={{ display: 'flex', gap: '0.4rem', background: 'rgba(255, 255, 255, 0.06)', padding: '0.25rem', borderRadius: 'var(--radius-full)' }}>
-                    <button
-                      onClick={() => setProfileSongFilter('all')}
-                      style={{
-                        background: profileSongFilter === 'all' ? 'var(--apple-pink)' : 'transparent',
-                        color: '#ffffff',
-                        border: 'none',
-                        borderRadius: 'var(--radius-full)',
-                        padding: '0.35rem 0.85rem',
-                        fontSize: '0.78rem',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      All ({myUploadedTracks.length})
-                    </button>
-                    <button
-                      onClick={() => setProfileSongFilter('public')}
-                      style={{
-                        background: profileSongFilter === 'public' ? 'var(--apple-green)' : 'transparent',
-                        color: profileSongFilter === 'public' ? '#000000' : '#ffffff',
-                        border: 'none',
-                        borderRadius: 'var(--radius-full)',
-                        padding: '0.35rem 0.85rem',
-                        fontSize: '0.78rem',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Public ({myUploadedTracks.filter((t) => t.visibility === 'public').length})
-                    </button>
-                    <button
-                      onClick={() => setProfileSongFilter('private')}
-                      style={{
-                        background: profileSongFilter === 'private' ? 'rgba(255, 255, 255, 0.25)' : 'transparent',
-                        color: '#ffffff',
-                        border: 'none',
-                        borderRadius: 'var(--radius-full)',
-                        padding: '0.35rem 0.85rem',
-                        fontSize: '0.78rem',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Private ({myUploadedTracks.filter((t) => t.visibility === 'private').length})
-                    </button>
-                  </div>
+                {/* Main Type Tabs: Tracks Privacy vs Playlists Privacy */}
+                <div style={{ display: 'flex', gap: '0.75rem', borderBottom: '1px solid rgba(255, 255, 255, 0.08)', paddingBottom: '1.25rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => setProfileActiveTab('tracks')}
+                    style={{
+                      background: profileActiveTab === 'tracks' ? 'var(--apple-pink)' : 'rgba(255, 255, 255, 0.05)',
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: 'var(--radius-full)',
+                      padding: '0.5rem 1.25rem',
+                      fontSize: '0.875rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                    }}
+                  >
+                    <Music size={16} />
+                    <span>Tracks Privacy ({myUploadedTracks.length})</span>
+                  </button>
+                  <button
+                    onClick={() => setProfileActiveTab('playlists')}
+                    style={{
+                      background: profileActiveTab === 'playlists' ? 'var(--apple-pink)' : 'rgba(255, 255, 255, 0.05)',
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: 'var(--radius-full)',
+                      padding: '0.5rem 1.25rem',
+                      fontSize: '0.875rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                    }}
+                  >
+                    <FolderLock size={16} />
+                    <span>Playlists Privacy ({playlists.filter((p) => p.isOwner).length})</span>
+                  </button>
                 </div>
 
-                {/* Track Rows */}
-                {myUploadedTracks.filter((t) =>
-                  profileSongFilter === 'all' ? true : t.visibility === profileSongFilter
-                ).length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '3.5rem 1rem', color: 'var(--text-tertiary)' }}>
-                    <Music size={40} style={{ margin: '0 auto 1rem', opacity: 0.4 }} />
-                    <div style={{ fontSize: '1rem', fontWeight: 600, color: '#ffffff', marginBottom: '0.5rem' }}>
-                      No songs found in this category
+                {profileActiveTab === 'tracks' ? (
+                  /* TRACKS PRIVACY MANAGER */
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
+                      <div>
+                        <h2 style={{ fontSize: '1.3rem', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: '0.25rem' }}>
+                          Track Privacy & Visibility
+                        </h2>
+                        <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+                          Click on any badge below to instantly switch track visibility between Public and Private.
+                        </p>
+                      </div>
+
+                      {/* Filter tabs */}
+                      <div style={{ display: 'flex', gap: '0.4rem', background: 'rgba(255, 255, 255, 0.06)', padding: '0.25rem', borderRadius: 'var(--radius-full)' }}>
+                        <button
+                          onClick={() => setProfileSongFilter('all')}
+                          style={{
+                            background: profileSongFilter === 'all' ? 'var(--apple-pink)' : 'transparent',
+                            color: '#ffffff',
+                            border: 'none',
+                            borderRadius: 'var(--radius-full)',
+                            padding: '0.35rem 0.85rem',
+                            fontSize: '0.78rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          All ({myUploadedTracks.length})
+                        </button>
+                        <button
+                          onClick={() => setProfileSongFilter('public')}
+                          style={{
+                            background: profileSongFilter === 'public' ? 'var(--apple-green)' : 'transparent',
+                            color: profileSongFilter === 'public' ? '#000000' : '#ffffff',
+                            border: 'none',
+                            borderRadius: 'var(--radius-full)',
+                            padding: '0.35rem 0.85rem',
+                            fontSize: '0.78rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Public ({myUploadedTracks.filter((t) => t.visibility === 'public').length})
+                        </button>
+                        <button
+                          onClick={() => setProfileSongFilter('private')}
+                          style={{
+                            background: profileSongFilter === 'private' ? 'rgba(255, 255, 255, 0.25)' : 'transparent',
+                            color: '#ffffff',
+                            border: 'none',
+                            borderRadius: 'var(--radius-full)',
+                            padding: '0.35rem 0.85rem',
+                            fontSize: '0.78rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Private ({myUploadedTracks.filter((t) => t.visibility === 'private').length})
+                        </button>
+                      </div>
                     </div>
-                    <p style={{ fontSize: '0.85rem', marginBottom: '1.25rem' }}>
-                      Add music to your Vault to listen anywhere and share with community listeners.
-                    </p>
-                    <button
-                      onClick={() => setActiveTab('upload')}
-                      className="btn-apple-primary"
-                      style={{ fontSize: '0.85rem' }}
-                    >
-                      <Upload size={15} />
-                      <span>Upload Your First Song</span>
-                    </button>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                    {myUploadedTracks
-                      .filter((t) => (profileSongFilter === 'all' ? true : t.visibility === profileSongFilter))
-                      .map((track) => {
-                        const isCurrentPlaying = currentTrack?.id === track.id;
-                        return (
-                          <div
-                            key={track.id}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              padding: '0.75rem 1rem',
-                              borderRadius: 'var(--radius-md)',
-                              background: isCurrentPlaying ? 'rgba(250, 36, 60, 0.12)' : 'rgba(255, 255, 255, 0.03)',
-                              border: isCurrentPlaying ? '1px solid rgba(250, 36, 60, 0.3)' : '1px solid rgba(255, 255, 255, 0.05)',
-                              transition: 'all 0.15s ease',
-                              gap: '1rem',
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flex: 1, overflow: 'hidden' }}>
-                              {/* Artwork + Play button overlay */}
+
+                    {/* Track Rows */}
+                    {myUploadedTracks.filter((t) =>
+                      profileSongFilter === 'all' ? true : t.visibility === profileSongFilter
+                    ).length === 0 ? (
+                      <div style={{ textAlign: 'center', padding: '3.5rem 1rem', color: 'var(--text-tertiary)' }}>
+                        <Music size={40} style={{ margin: '0 auto 1rem', opacity: 0.4 }} />
+                        <div style={{ fontSize: '1rem', fontWeight: 600, color: '#ffffff', marginBottom: '0.5rem' }}>
+                          No songs found in this category
+                        </div>
+                        <p style={{ fontSize: '0.85rem', marginBottom: '1.25rem' }}>
+                          Add music to your Vault to listen anywhere and share with community listeners.
+                        </p>
+                        <button
+                          onClick={() => setActiveTab('upload')}
+                          className="btn-apple-primary"
+                          style={{ fontSize: '0.85rem' }}
+                        >
+                          <Upload size={15} />
+                          <span>Upload Your First Song</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        {myUploadedTracks
+                          .filter((t) => (profileSongFilter === 'all' ? true : t.visibility === profileSongFilter))
+                          .map((track) => {
+                            const isCurrentPlaying = currentTrack?.id === track.id;
+                            return (
                               <div
-                                onClick={() => playTrack(track)}
+                                key={track.id}
                                 style={{
-                                  width: '2.8rem',
-                                  height: '2.8rem',
-                                  borderRadius: '0.5rem',
-                                  background: getTrackGradient(track.id),
                                   display: 'flex',
                                   alignItems: 'center',
-                                  justifyContent: 'center',
-                                  cursor: 'pointer',
-                                  flexShrink: 0,
-                                  position: 'relative',
-                                  boxShadow: '0 4px 10px rgba(0, 0, 0, 0.35)',
+                                  justifyContent: 'space-between',
+                                  padding: '0.75rem 1rem',
+                                  borderRadius: 'var(--radius-md)',
+                                  background: isCurrentPlaying ? 'rgba(250, 36, 60, 0.12)' : 'rgba(255, 255, 255, 0.03)',
+                                  border: isCurrentPlaying ? '1px solid rgba(250, 36, 60, 0.3)' : '1px solid rgba(255, 255, 255, 0.05)',
+                                  transition: 'all 0.15s ease',
+                                  gap: '1rem',
                                 }}
                               >
-                                {isCurrentPlaying && isPlaying ? (
-                                  <Pause size={16} fill="#ffffff" color="#ffffff" />
-                                ) : (
-                                  <Play size={16} fill="#ffffff" color="#ffffff" style={{ marginLeft: 2 }} />
-                                )}
-                              </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flex: 1, overflow: 'hidden' }}>
+                                  <div
+                                    onClick={() => playTrack(track)}
+                                    style={{
+                                      width: '2.8rem',
+                                      height: '2.8rem',
+                                      borderRadius: '0.5rem',
+                                      background: getTrackGradient(track.id),
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      cursor: 'pointer',
+                                      flexShrink: 0,
+                                      position: 'relative',
+                                      boxShadow: '0 4px 10px rgba(0, 0, 0, 0.35)',
+                                    }}
+                                  >
+                                    {isCurrentPlaying && isPlaying ? (
+                                      <Pause size={16} fill="#ffffff" color="#ffffff" />
+                                    ) : (
+                                      <Play size={16} fill="#ffffff" color="#ffffff" style={{ marginLeft: 2 }} />
+                                    )}
+                                  </div>
 
-                              <div style={{ overflow: 'hidden', flex: 1 }}>
-                                <div style={{
-                                  fontWeight: 600,
-                                  fontSize: '0.92rem',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                  color: isCurrentPlaying ? 'var(--apple-pink)' : '#ffffff',
-                                }}>
-                                  {track.title}
+                                  <div style={{ overflow: 'hidden', flex: 1 }}>
+                                    <div style={{
+                                      fontWeight: 600,
+                                      fontSize: '0.92rem',
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                      color: isCurrentPlaying ? 'var(--apple-pink)' : '#ffffff',
+                                    }}>
+                                      {track.title}
+                                    </div>
+                                    <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      {track.artist} {track.album ? `• ${track.album}` : ''}
+                                    </div>
+                                  </div>
                                 </div>
-                                <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                  {track.artist} {track.album ? `• ${track.album}` : ''}
+
+                                <div className="desktop-only" style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', textAlign: 'right', minWidth: '80px' }}>
+                                  <div>{formatTime(track.duration)}</div>
+                                  <div>{((track.fileSize || 0) / (1024 * 1024)).toFixed(1)} MB</div>
+                                </div>
+
+                                {/* 1-Click Interactive Privacy Toggle Badge */}
+                                <button
+                                  onClick={() => {
+                                    const newVis = track.visibility === 'public' ? 'private' : 'public';
+                                    toggleTrackVisibility(track.id, track.visibility);
+                                    showToast(`Track privacy changed to ${newVis.toUpperCase()}`);
+                                  }}
+                                  title="Click to toggle Public / Private"
+                                  style={{
+                                    background: track.visibility === 'public' ? 'rgba(48, 209, 88, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                                    color: track.visibility === 'public' ? 'var(--apple-green)' : 'var(--text-secondary)',
+                                    border: `1px solid ${track.visibility === 'public' ? 'rgba(48, 209, 88, 0.35)' : 'rgba(255, 255, 255, 0.15)'}`,
+                                    borderRadius: 'var(--radius-full)',
+                                    padding: '0.4rem 0.85rem',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 700,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.4rem',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.15s ease',
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  {track.visibility === 'public' ? <Globe size={13} /> : <Lock size={13} />}
+                                  <span>{track.visibility === 'public' ? 'PUBLIC' : 'PRIVATE'}</span>
+                                </button>
+
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                  <button
+                                    onClick={() => setMenuTrack(track)}
+                                    title="Song Options"
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      color: 'var(--text-secondary)',
+                                      padding: '0.4rem',
+                                      cursor: 'pointer',
+                                      borderRadius: '50%',
+                                    }}
+                                  >
+                                    <MoreVertical size={16} />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteTrack(track.id)}
+                                    title="Delete Track"
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      color: 'var(--text-tertiary)',
+                                      padding: '0.4rem',
+                                      cursor: 'pointer',
+                                      borderRadius: '50%',
+                                    }}
+                                    onMouseEnter={(e) => (e.currentTarget.style.color = '#ff6b81')}
+                                    onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-tertiary)')}
+                                  >
+                                    <Trash2 size={16} />
+                                  </button>
                                 </div>
                               </div>
-                            </div>
+                            );
+                          })}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* PLAYLISTS PRIVACY MANAGER */
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
+                      <div>
+                        <h2 style={{ fontSize: '1.3rem', fontWeight: 800, letterSpacing: '-0.02em', marginBottom: '0.25rem' }}>
+                          Playlist Privacy & Visibility
+                        </h2>
+                        <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+                          Click on any badge below to instantly switch your playlist between Public (everyone can view & listen) and Private.
+                        </p>
+                      </div>
 
-                            {/* Details: Duration & Size */}
-                            <div className="desktop-only" style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', textAlign: 'right', minWidth: '80px' }}>
-                              <div>{formatTime(track.duration)}</div>
-                              <div>{((track.fileSize || 0) / (1024 * 1024)).toFixed(1)} MB</div>
-                            </div>
+                      {/* Filter tabs */}
+                      <div style={{ display: 'flex', gap: '0.4rem', background: 'rgba(255, 255, 255, 0.06)', padding: '0.25rem', borderRadius: 'var(--radius-full)' }}>
+                        <button
+                          onClick={() => setProfilePlaylistFilter('all')}
+                          style={{
+                            background: profilePlaylistFilter === 'all' ? 'var(--apple-pink)' : 'transparent',
+                            color: '#ffffff',
+                            border: 'none',
+                            borderRadius: 'var(--radius-full)',
+                            padding: '0.35rem 0.85rem',
+                            fontSize: '0.78rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          All ({playlists.filter((p) => p.isOwner).length})
+                        </button>
+                        <button
+                          onClick={() => setProfilePlaylistFilter('public')}
+                          style={{
+                            background: profilePlaylistFilter === 'public' ? 'var(--apple-green)' : 'transparent',
+                            color: profilePlaylistFilter === 'public' ? '#000000' : '#ffffff',
+                            border: 'none',
+                            borderRadius: 'var(--radius-full)',
+                            padding: '0.35rem 0.85rem',
+                            fontSize: '0.78rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Public ({playlists.filter((p) => p.isOwner && p.visibility === 'public').length})
+                        </button>
+                        <button
+                          onClick={() => setProfilePlaylistFilter('private')}
+                          style={{
+                            background: profilePlaylistFilter === 'private' ? 'rgba(255, 255, 255, 0.25)' : 'transparent',
+                            color: '#ffffff',
+                            border: 'none',
+                            borderRadius: 'var(--radius-full)',
+                            padding: '0.35rem 0.85rem',
+                            fontSize: '0.78rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Private ({playlists.filter((p) => p.isOwner && p.visibility === 'private').length})
+                        </button>
+                      </div>
+                    </div>
 
-                            {/* 1-Click Interactive Privacy Toggle Badge */}
-                            <button
-                              onClick={() => {
-                                const newVis = track.visibility === 'public' ? 'private' : 'public';
-                                toggleTrackVisibility(track.id, track.visibility);
-                                showToast(`Track privacy changed to ${newVis.toUpperCase()}`);
-                              }}
-                              title="Click to toggle Public / Private"
+                    {/* Playlist Rows */}
+                    {playlists
+                      .filter((p) => p.isOwner)
+                      .filter((p) => (profilePlaylistFilter === 'all' ? true : p.visibility === profilePlaylistFilter)).length === 0 ? (
+                      <div style={{ textAlign: 'center', padding: '3.5rem 1rem', color: 'var(--text-tertiary)' }}>
+                        <FolderLock size={40} style={{ margin: '0 auto 1rem', opacity: 0.4 }} />
+                        <div style={{ fontSize: '1rem', fontWeight: 600, color: '#ffffff', marginBottom: '0.5rem' }}>
+                          No playlists found in this category
+                        </div>
+                        <p style={{ fontSize: '0.85rem', marginBottom: '1.25rem' }}>
+                          Create playlists to curate your tracks and share with friends or keep them private.
+                        </p>
+                        <button
+                          onClick={() => setShowNewPlaylistModal(true)}
+                          className="btn-apple-primary"
+                          style={{ fontSize: '0.85rem' }}
+                        >
+                          <Plus size={15} />
+                          <span>Create New Playlist</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        {playlists
+                          .filter((p) => p.isOwner)
+                          .filter((p) => (profilePlaylistFilter === 'all' ? true : p.visibility === profilePlaylistFilter))
+                          .map((playlist) => (
+                            <div
+                              key={playlist.id}
                               style={{
-                                background: track.visibility === 'public' ? 'rgba(48, 209, 88, 0.15)' : 'rgba(255, 255, 255, 0.08)',
-                                color: track.visibility === 'public' ? 'var(--apple-green)' : 'var(--text-secondary)',
-                                border: `1px solid ${track.visibility === 'public' ? 'rgba(48, 209, 88, 0.35)' : 'rgba(255, 255, 255, 0.15)'}`,
-                                borderRadius: 'var(--radius-full)',
-                                padding: '0.4rem 0.85rem',
-                                fontSize: '0.75rem',
-                                fontWeight: 700,
                                 display: 'flex',
                                 alignItems: 'center',
-                                gap: '0.4rem',
-                                cursor: 'pointer',
+                                justifyContent: 'space-between',
+                                padding: '0.75rem 1rem',
+                                borderRadius: 'var(--radius-md)',
+                                background: 'rgba(255, 255, 255, 0.03)',
+                                border: '1px solid rgba(255, 255, 255, 0.05)',
                                 transition: 'all 0.15s ease',
-                                flexShrink: 0,
+                                gap: '1rem',
                               }}
                             >
-                              {track.visibility === 'public' ? <Globe size={13} /> : <Lock size={13} />}
-                              <span>{track.visibility === 'public' ? 'PUBLIC' : 'PRIVATE'}</span>
-                            </button>
+                              <div
+                                onClick={() => handleViewPlaylist(playlist)}
+                                style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flex: 1, overflow: 'hidden', cursor: 'pointer' }}
+                              >
+                                <div
+                                  style={{
+                                    width: '2.8rem',
+                                    height: '2.8rem',
+                                    borderRadius: '0.5rem',
+                                    background: getTrackGradient(playlist.id),
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    flexShrink: 0,
+                                    boxShadow: '0 4px 10px rgba(0, 0, 0, 0.35)',
+                                  }}
+                                >
+                                  <FolderLock size={18} color="#ffffff" />
+                                </div>
 
-                            {/* Options & Delete */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                <div style={{ overflow: 'hidden', flex: 1 }}>
+                                  <div style={{
+                                    fontWeight: 600,
+                                    fontSize: '0.92rem',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                    color: '#ffffff',
+                                  }}>
+                                    {playlist.name}
+                                  </div>
+                                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {playlist.description || 'Personal playlist'} • {playlist.trackCount} Songs
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* 1-Click Interactive Playlist Privacy Toggle Badge */}
                               <button
-                                onClick={() => setMenuTrack(track)}
-                                title="Song Options"
+                                onClick={() => togglePlaylistVisibility(playlist.id, playlist.visibility)}
+                                title="Click to toggle Public / Private"
                                 style={{
-                                  background: 'none',
-                                  border: 'none',
-                                  color: 'var(--text-secondary)',
-                                  padding: '0.4rem',
+                                  background: playlist.visibility === 'public' ? 'rgba(48, 209, 88, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                                  color: playlist.visibility === 'public' ? 'var(--apple-green)' : 'var(--text-secondary)',
+                                  border: `1px solid ${playlist.visibility === 'public' ? 'rgba(48, 209, 88, 0.35)' : 'rgba(255, 255, 255, 0.15)'}`,
+                                  borderRadius: 'var(--radius-full)',
+                                  padding: '0.4rem 0.85rem',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 700,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.4rem',
                                   cursor: 'pointer',
-                                  borderRadius: '50%',
+                                  transition: 'all 0.15s ease',
+                                  flexShrink: 0,
                                 }}
                               >
-                                <MoreVertical size={16} />
+                                {playlist.visibility === 'public' ? <Globe size={13} /> : <Lock size={13} />}
+                                <span>{playlist.visibility === 'public' ? 'PUBLIC' : 'PRIVATE'}</span>
                               </button>
+
                               <button
-                                onClick={() => handleDeleteTrack(track.id)}
-                                title="Delete Track"
+                                onClick={() => handleDeletePlaylist(playlist.id)}
+                                title="Delete Playlist"
                                 style={{
                                   background: 'none',
                                   border: 'none',
@@ -2873,9 +3365,9 @@ export default function WorkspacePage() {
                                 <Trash2 size={16} />
                               </button>
                             </div>
-                          </div>
-                        );
-                      })}
+                          ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -3699,24 +4191,36 @@ export default function WorkspacePage() {
                 <label style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>
                   Visibility
                 </label>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', gap: '0.65rem' }}>
                   <button
                     type="button"
                     onClick={() => setNewPlaylistVisibility('private')}
                     className={`btn-apple-secondary ${newPlaylistVisibility === 'private' ? 'btn-apple-primary' : ''}`}
-                    style={{ flex: 1, justifyContent: 'center' }}
+                    style={{
+                      flex: 1,
+                      justifyContent: 'center',
+                      color: '#ffffff',
+                      fontWeight: 600,
+                      border: newPlaylistVisibility === 'private' ? '1px solid rgba(250, 36, 60, 0.4)' : '1px solid rgba(255, 255, 255, 0.1)',
+                    }}
                   >
-                    <Lock size={14} />
-                    <span>Private</span>
+                    <Lock size={14} color="#ffffff" />
+                    <span style={{ color: '#ffffff' }}>Private (Only Me)</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setNewPlaylistVisibility('public')}
                     className={`btn-apple-secondary ${newPlaylistVisibility === 'public' ? 'btn-apple-primary' : ''}`}
-                    style={{ flex: 1, justifyContent: 'center' }}
+                    style={{
+                      flex: 1,
+                      justifyContent: 'center',
+                      color: '#ffffff',
+                      fontWeight: 600,
+                      border: newPlaylistVisibility === 'public' ? '1px solid rgba(250, 36, 60, 0.4)' : '1px solid rgba(255, 255, 255, 0.1)',
+                    }}
                   >
-                    <Globe size={14} />
-                    <span>Public</span>
+                    <Globe size={14} color="#ffffff" />
+                    <span style={{ color: '#ffffff' }}>Public (Everyone)</span>
                   </button>
                 </div>
               </div>
