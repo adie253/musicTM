@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import { getSession } from '@/lib/auth';
-import { db, ensureDbInitialized } from '@/lib/db';
+import { db, client, ensureDbInitialized } from '@/lib/db';
 import { tracks, playlists, playlistTracks } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { Readable } from 'stream';
@@ -21,7 +21,14 @@ export async function GET(
     const { id } = await params;
 
     const foundTrack = await db
-      .select()
+      .select({
+        id: tracks.id,
+        userId: tracks.userId,
+        title: tracks.title,
+        filePath: tracks.filePath,
+        mimeType: tracks.mimeType,
+        fileSize: tracks.fileSize,
+      })
       .from(tracks)
       .where(eq(tracks.id, id))
       .limit(1);
@@ -32,12 +39,9 @@ export async function GET(
 
     const track = foundTrack[0];
 
-    // Access control:
-    // If track belongs to user -> allow
+    // Access control
     let hasAccess = track.userId === session.userId;
-
     if (!hasAccess) {
-      // Check if track is part of any public playlist
       const publicRefs = await db
         .select({ playlistId: playlistTracks.playlistId })
         .from(playlistTracks)
@@ -54,16 +58,56 @@ export async function GET(
       return new NextResponse('Access denied', { status: 403 });
     }
 
-    if (!fs.existsSync(track.filePath)) {
-      return new NextResponse('Audio file missing on disk', { status: 404 });
+    const range = req.headers.get('range');
+    const fileSize = track.fileSize;
+    const mimeType = track.mimeType || 'audio/mpeg';
+
+    // 1. STREAM FROM LOCAL DISK (if file exists)
+    if (fs.existsSync(track.filePath)) {
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+        if (start >= fileSize || end >= fileSize) {
+          return new NextResponse('Requested range not satisfiable', {
+            status: 416,
+            headers: { 'Content-Range': `bytes */${fileSize}` },
+          });
+        }
+
+        const chunkSize = end - start + 1;
+        const nodeStream = fs.createReadStream(track.filePath, { start, end });
+        const webStream = Readable.toWeb(nodeStream) as ReadableStream;
+
+        return new Response(webStream, {
+          status: 206,
+          headers: {
+            'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': chunkSize.toString(),
+            'Content-Type': mimeType,
+            'Cache-Control': 'no-cache, private',
+          },
+        });
+      }
+
+      const nodeStream = fs.createReadStream(track.filePath);
+      const webStream = Readable.toWeb(nodeStream) as ReadableStream;
+      return new Response(webStream, {
+        status: 200,
+        headers: {
+          'Accept-Ranges': 'bytes',
+          'Content-Length': fileSize.toString(),
+          'Content-Type': mimeType,
+          'Cache-Control': 'no-cache, private',
+        },
+      });
     }
 
-    const stat = fs.statSync(track.filePath);
-    const fileSize = stat.size;
-    const range = req.headers.get('range');
-
+    // 2. STREAM FROM TURSO CLOUD DATABASE (BLOB substr streaming)
+    // Check if audio_data is stored in Turso
     if (range) {
-      // Byte Range Request (Seeking / Scrubbing)
       const parts = range.replace(/bytes=/, '').split('-');
       const start = parseInt(parts[0], 10);
       const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
@@ -71,38 +115,53 @@ export async function GET(
       if (start >= fileSize || end >= fileSize) {
         return new NextResponse('Requested range not satisfiable', {
           status: 416,
-          headers: {
-            'Content-Range': `bytes */${fileSize}`,
-          },
+          headers: { 'Content-Range': `bytes */${fileSize}` },
         });
       }
 
       const chunkSize = end - start + 1;
-      const nodeStream = fs.createReadStream(track.filePath, { start, end });
-      const webStream = Readable.toWeb(nodeStream) as ReadableStream;
+      // SQLite substr is 1-indexed: substr(data, start + 1, chunkSize)
+      const res = await client.execute({
+        sql: 'SELECT substr(audio_data, ?, ?) as chunk FROM tracks WHERE id = ?;',
+        args: [start + 1, chunkSize, id],
+      });
 
-      return new Response(webStream, {
+      if (!res.rows[0] || !res.rows[0].chunk) {
+        return new NextResponse('Audio stream data not found in vault. Please re-upload this track.', { status: 404 });
+      }
+
+      const chunkBuffer = Buffer.from(res.rows[0].chunk as any);
+
+      return new Response(chunkBuffer, {
         status: 206,
         headers: {
           'Content-Range': `bytes ${start}-${end}/${fileSize}`,
           'Accept-Ranges': 'bytes',
-          'Content-Length': chunkSize.toString(),
-          'Content-Type': track.mimeType || 'audio/mpeg',
+          'Content-Length': chunkBuffer.length.toString(),
+          'Content-Type': mimeType,
           'Cache-Control': 'no-cache, private',
         },
       });
     }
 
-    // Full Stream
-    const nodeStream = fs.createReadStream(track.filePath);
-    const webStream = Readable.toWeb(nodeStream) as ReadableStream;
+    // Full audio fetch from Turso
+    const res = await client.execute({
+      sql: 'SELECT audio_data FROM tracks WHERE id = ?;',
+      args: [id],
+    });
 
-    return new Response(webStream, {
+    if (!res.rows[0] || !res.rows[0].audio_data) {
+      return new NextResponse('Audio stream data not found. Please re-upload this track.', { status: 404 });
+    }
+
+    const fullBuffer = Buffer.from(res.rows[0].audio_data as any);
+
+    return new Response(fullBuffer, {
       status: 200,
       headers: {
         'Accept-Ranges': 'bytes',
-        'Content-Length': fileSize.toString(),
-        'Content-Type': track.mimeType || 'audio/mpeg',
+        'Content-Length': fullBuffer.length.toString(),
+        'Content-Type': mimeType,
         'Cache-Control': 'no-cache, private',
       },
     });

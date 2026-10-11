@@ -28,7 +28,7 @@ if (!dbUrl) {
   dbUrl = `file:${path.join(baseDir, 'vault.db').replace(/\\/g, '/')}`;
 }
 
-const client = createClient({
+export const client = createClient({
   url: dbUrl,
   authToken: process.env.DATABASE_AUTH_TOKEN,
 });

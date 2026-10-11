@@ -85,7 +85,11 @@ export async function POST(req: NextRequest) {
     }
 
     const diskPath = path.join(uploadsDir, storedFileName);
-    fs.writeFileSync(diskPath, buffer);
+    try {
+      fs.writeFileSync(diskPath, buffer);
+    } catch (diskErr) {
+      console.warn('Local disk write skipped in serverless environment:', diskErr);
+    }
 
     const now = Date.now();
     await db.insert(tracks).values({
@@ -99,6 +103,7 @@ export async function POST(req: NextRequest) {
       fileName: originalName,
       mimeType: file.type || 'audio/mpeg',
       fileSize,
+      audioData: buffer,
       createdAt: now,
     });
 

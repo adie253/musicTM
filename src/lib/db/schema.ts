@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, blob } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -21,6 +21,7 @@ export const tracks = sqliteTable('tracks', {
   fileName: text('file_name').notNull(),
   mimeType: text('mime_type').notNull().default('audio/mpeg'),
   fileSize: integer('file_size').notNull(),
+  audioData: blob('audio_data', { mode: 'buffer' }),
   createdAt: integer('created_at').notNull(),
 });
 

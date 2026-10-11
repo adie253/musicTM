@@ -22,13 +22,13 @@ import {
   ChevronDown,
   Repeat,
   Shuffle,
-  MoreHorizontal,
   Compass,
   ListMusic,
   User,
   CheckCircle2,
   AlertCircle,
-  Radio,
+  Loader2,
+  Disc3,
 } from 'lucide-react';
 
 interface Track {
@@ -87,6 +87,8 @@ export default function WorkspacePage() {
   // Player state
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.85);
@@ -107,9 +109,14 @@ export default function WorkspacePage() {
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [newPlaylistDesc, setNewPlaylistDesc] = useState('');
   const [newPlaylistVisibility, setNewPlaylistVisibility] = useState<'private' | 'public'>('private');
+  const [creatingPlaylist, setCreatingPlaylist] = useState(false);
+
   const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
   const [playlistTracks, setPlaylistTracks] = useState<Track[]>([]);
+  const [playlistLoading, setPlaylistLoading] = useState(false);
+
   const [trackToAddToPlaylist, setTrackToAddToPlaylist] = useState<Track | null>(null);
+  const [addingToPlaylistId, setAddingToPlaylistId] = useState<string | null>(null);
 
   // Fetch session & initial data
   useEffect(() => {
@@ -165,6 +172,8 @@ export default function WorkspacePage() {
 
   // Audio Playback
   function playTrack(track: Track) {
+    setPlaybackError(null);
+
     if (currentTrack?.id === track.id) {
       if (isPlaying) {
         audioRef.current?.pause();
@@ -178,12 +187,22 @@ export default function WorkspacePage() {
 
     setCurrentTrack(track);
     setCurrentTime(0);
+    setIsBuffering(true);
     setIsPlaying(true);
 
     if (audioRef.current) {
       audioRef.current.src = `/api/tracks/${track.id}/stream`;
       audioRef.current.load();
-      audioRef.current.play().catch((err) => console.warn('Playback error:', err));
+      audioRef.current
+        .play()
+        .then(() => {
+          setIsBuffering(false);
+          setIsPlaying(true);
+        })
+        .catch((err) => {
+          console.warn('Playback error:', err);
+          setIsBuffering(false);
+        });
     }
   }
 
@@ -295,6 +314,7 @@ export default function WorkspacePage() {
     e.preventDefault();
     if (!newPlaylistName.trim()) return;
 
+    setCreatingPlaylist(true);
     try {
       const res = await fetch('/api/playlists', {
         method: 'POST',
@@ -314,11 +334,14 @@ export default function WorkspacePage() {
       }
     } catch (err) {
       console.error('Create playlist error:', err);
+    } finally {
+      setCreatingPlaylist(false);
     }
   }
 
   async function handleViewPlaylist(playlist: Playlist) {
     setSelectedPlaylist(playlist);
+    setPlaylistLoading(true);
     try {
       const res = await fetch(`/api/playlists/${playlist.id}`);
       if (res.ok) {
@@ -327,11 +350,14 @@ export default function WorkspacePage() {
       }
     } catch (err) {
       console.error('Fetch playlist detail error:', err);
+    } finally {
+      setPlaylistLoading(false);
     }
   }
 
   async function handleAddTrackToPlaylist(playlistId: string) {
     if (!trackToAddToPlaylist) return;
+    setAddingToPlaylistId(playlistId);
     try {
       const res = await fetch(`/api/playlists/${playlistId}`, {
         method: 'POST',
@@ -344,6 +370,8 @@ export default function WorkspacePage() {
       }
     } catch (err) {
       console.error('Add track error:', err);
+    } finally {
+      setAddingToPlaylistId(null);
     }
   }
 
@@ -380,13 +408,26 @@ export default function WorkspacePage() {
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: '#000000', color: '#ffffff' }}>
-      {/* Audio Element */}
+      {/* Audio Element with Full Event Bindings */}
       <audio
         ref={audioRef}
         loop={isLooping}
         onTimeUpdate={handleTimeUpdate}
+        onWaiting={() => setIsBuffering(true)}
+        onCanPlay={() => setIsBuffering(false)}
+        onPlaying={() => {
+          setIsBuffering(false);
+          setIsPlaying(true);
+        }}
         onEnded={() => {
           if (!isLooping) playNextTrack();
+        }}
+        onError={() => {
+          setIsBuffering(false);
+          setIsPlaying(false);
+          setPlaybackError(
+            'Unable to stream this audio track. If this file was uploaded before the cloud storage upgrade, please re-upload it.'
+          );
         }}
         onLoadedMetadata={handleTimeUpdate}
       />
@@ -625,7 +666,7 @@ export default function WorkspacePage() {
         display: 'flex',
         flexDirection: 'column',
       }}>
-        {/* Style responsive margin on desktop */}
+        {/* Responsive margin on desktop */}
         <style jsx>{`
           @media (min-width: 769px) {
             div[style*="margin-left"] {
@@ -694,6 +735,32 @@ export default function WorkspacePage() {
           </div>
         </div>
 
+        {/* PLAYBACK ERROR BANNER */}
+        {playbackError && (
+          <div style={{
+            margin: '1rem 1.5rem 0',
+            padding: '0.85rem 1.25rem',
+            borderRadius: 'var(--radius-md)',
+            background: 'rgba(250, 36, 60, 0.15)',
+            border: '1px solid rgba(250, 36, 60, 0.35)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.75rem',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+              <AlertCircle size={18} color="var(--apple-pink)" style={{ flexShrink: 0 }} />
+              <span style={{ fontSize: '0.85rem', color: '#ff7a8d' }}>{playbackError}</span>
+            </div>
+            <button
+              onClick={() => setPlaybackError(null)}
+              style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer', fontSize: '0.8rem' }}
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* MAIN CONTENT CONTAINER */}
         <main style={{
           flex: 1,
@@ -703,63 +770,66 @@ export default function WorkspacePage() {
           margin: '0 auto',
           width: '100%',
         }}>
-          {/* TAB 1: LISTEN NOW (Apple Music Featured Hero) */}
+          {/* TAB 1: LISTEN NOW */}
           {activeTab === 'listen' && (
             <div>
               {/* Apple Music Hero Banner */}
-              <div style={{
-                borderRadius: 'var(--radius-xl)',
-                background: 'linear-gradient(135deg, #1f0814 0%, #3a0d1e 50%, #fa243c 100%)',
-                padding: '2.5rem 2rem',
-                position: 'relative',
-                overflow: 'hidden',
-                marginBottom: '2.5rem',
-                boxShadow: '0 16px 40px rgba(250, 36, 60, 0.25)',
-              }}>
-                <div style={{ maxWidth: '520px', position: 'relative', zIndex: 2 }}>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'rgba(255, 255, 255, 0.7)', marginBottom: '0.5rem' }}>
-                    FEATURED VAULT STREAM
-                  </div>
-                  <h1 style={{ fontSize: 'clamp(1.75rem, 4vw, 2.75rem)', fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1.1, marginBottom: '0.75rem' }}>
-                    Pure Audio Experience
-                  </h1>
-                  <p style={{ fontSize: '0.9375rem', color: 'rgba(255, 255, 255, 0.8)', marginBottom: '1.5rem', lineHeight: 1.5 }}>
-                    High fidelity streaming, custom playlists, and private storage powered by your cloud vault.
-                  </p>
-                  <div style={{ display: 'flex', gap: '0.75rem' }}>
-                    <button
-                      onClick={() => {
-                        if (tracks.length > 0) playTrack(tracks[0]);
-                      }}
-                      className="btn-apple-primary"
-                      style={{ padding: '0.75rem 1.75rem' }}
-                    >
-                      <Play size={18} fill="#ffffff" />
-                      <span>Play All Songs</span>
-                    </button>
-                    <button
-                      onClick={() => setActiveTab('upload')}
-                      className="btn-apple-secondary"
-                      style={{ padding: '0.75rem 1.25rem', backdropFilter: 'blur(20px)' }}
-                    >
-                      <Upload size={16} />
-                      <span>Upload</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Decorative vinyl/artwork background */}
+              {loading ? (
+                <div className="apple-skeleton" style={{ height: '220px', borderRadius: 'var(--radius-xl)', marginBottom: '2.5rem' }} />
+              ) : (
                 <div style={{
-                  position: 'absolute',
-                  right: '-30px',
-                  bottom: '-30px',
-                  width: '260px',
-                  height: '260px',
-                  borderRadius: '50%',
-                  background: 'radial-gradient(circle, rgba(250, 36, 60, 0.4) 0%, transparent 70%)',
-                  pointerEvents: 'none',
-                }} />
-              </div>
+                  borderRadius: 'var(--radius-xl)',
+                  background: 'linear-gradient(135deg, #1f0814 0%, #3a0d1e 50%, #fa243c 100%)',
+                  padding: '2.5rem 2rem',
+                  position: 'relative',
+                  overflow: 'hidden',
+                  marginBottom: '2.5rem',
+                  boxShadow: '0 16px 40px rgba(250, 36, 60, 0.25)',
+                }}>
+                  <div style={{ maxWidth: '520px', position: 'relative', zIndex: 2 }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'rgba(255, 255, 255, 0.7)', marginBottom: '0.5rem' }}>
+                      FEATURED VAULT STREAM
+                    </div>
+                    <h1 style={{ fontSize: 'clamp(1.75rem, 4vw, 2.75rem)', fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1.1, marginBottom: '0.75rem' }}>
+                      Pure Audio Experience
+                    </h1>
+                    <p style={{ fontSize: '0.9375rem', color: 'rgba(255, 255, 255, 0.8)', marginBottom: '1.5rem', lineHeight: 1.5 }}>
+                      High fidelity streaming, custom playlists, and private storage powered by your cloud vault.
+                    </p>
+                    <div style={{ display: 'flex', gap: '0.75rem' }}>
+                      <button
+                        onClick={() => {
+                          if (tracks.length > 0) playTrack(tracks[0]);
+                        }}
+                        className="btn-apple-primary"
+                        style={{ padding: '0.75rem 1.75rem' }}
+                      >
+                        <Play size={18} fill="#ffffff" />
+                        <span>Play All Songs</span>
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('upload')}
+                        className="btn-apple-secondary"
+                        style={{ padding: '0.75rem 1.25rem', backdropFilter: 'blur(20px)' }}
+                      >
+                        <Upload size={16} />
+                        <span>Upload</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{
+                    position: 'absolute',
+                    right: '-30px',
+                    bottom: '-30px',
+                    width: '260px',
+                    height: '260px',
+                    borderRadius: '50%',
+                    background: 'radial-gradient(circle, rgba(250, 36, 60, 0.4) 0%, transparent 70%)',
+                    pointerEvents: 'none',
+                  }} />
+                </div>
+              )}
 
               {/* Top Tracks Section */}
               <div style={{ marginBottom: '2.5rem' }}>
@@ -773,65 +843,91 @@ export default function WorkspacePage() {
                   </button>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.85rem' }}>
-                  {tracks.slice(0, 6).map((track) => {
-                    const isTrackActive = currentTrack?.id === track.id;
-                    return (
-                      <div
-                        key={track.id}
-                        onClick={() => playTrack(track)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.85rem',
-                          padding: '0.75rem 1rem',
-                          borderRadius: 'var(--radius-md)',
-                          background: isTrackActive ? 'rgba(250, 36, 60, 0.12)' : 'rgba(255, 255, 255, 0.04)',
-                          cursor: 'pointer',
-                          transition: 'background 0.15s var(--ease-apple)',
-                        }}
-                      >
-                        <div style={{
-                          width: '3.25rem',
-                          height: '3.25rem',
-                          borderRadius: '0.65rem',
-                          background: getTrackGradient(track.id),
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          flexShrink: 0,
-                          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
-                        }}>
+                {loading ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.85rem' }}>
+                    {[1, 2, 3, 4, 5, 6].map((i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', padding: '0.75rem 1rem' }}>
+                        <div className="apple-skeleton" style={{ width: '3.25rem', height: '3.25rem', borderRadius: '0.65rem' }} />
+                        <div style={{ flex: 1 }}>
+                          <div className="apple-skeleton" style={{ height: '14px', width: '70%', marginBottom: '8px' }} />
+                          <div className="apple-skeleton" style={{ height: '10px', width: '45%' }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.85rem' }}>
+                    {tracks.slice(0, 6).map((track) => {
+                      const isTrackActive = currentTrack?.id === track.id;
+                      return (
+                        <div
+                          key={track.id}
+                          onClick={() => playTrack(track)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.85rem',
+                            padding: '0.75rem 1rem',
+                            borderRadius: 'var(--radius-md)',
+                            background: isTrackActive ? 'rgba(250, 36, 60, 0.12)' : 'rgba(255, 255, 255, 0.04)',
+                            cursor: 'pointer',
+                            transition: 'background 0.15s var(--ease-apple)',
+                          }}
+                        >
+                          <div style={{
+                            width: '3.25rem',
+                            height: '3.25rem',
+                            borderRadius: '0.65rem',
+                            background: getTrackGradient(track.id),
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0,
+                            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+                          }}>
+                            {isTrackActive && isBuffering ? (
+                              <Loader2 size={18} className="animate-spin" color="#ffffff" />
+                            ) : isTrackActive && isPlaying ? (
+                              <Pause size={18} fill="#ffffff" color="#ffffff" />
+                            ) : (
+                              <Play size={18} fill="#ffffff" color="#ffffff" style={{ marginLeft: '2px' }} />
+                            )}
+                          </div>
+
+                          <div style={{ flex: 1, overflow: 'hidden' }}>
+                            <div style={{
+                              fontWeight: 600,
+                              fontSize: '0.9125rem',
+                              color: isTrackActive ? 'var(--apple-pink)' : '#ffffff',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}>
+                              {track.title}
+                            </div>
+                            <div style={{ fontSize: '0.78125rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {track.artist}
+                            </div>
+                          </div>
+
+                          {/* Equalizer animation if active */}
                           {isTrackActive && isPlaying ? (
-                            <Pause size={18} fill="#ffffff" color="#ffffff" />
+                            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '16px' }}>
+                              <div className="eq-bar" />
+                              <div className="eq-bar" />
+                              <div className="eq-bar" />
+                              <div className="eq-bar" />
+                            </div>
                           ) : (
-                            <Play size={18} fill="#ffffff" color="#ffffff" style={{ marginLeft: '2px' }} />
+                            <span style={{ fontSize: '0.78125rem', color: 'var(--text-tertiary)' }}>
+                              {formatTime(track.duration)}
+                            </span>
                           )}
                         </div>
-
-                        <div style={{ flex: 1, overflow: 'hidden' }}>
-                          <div style={{
-                            fontWeight: 600,
-                            fontSize: '0.9125rem',
-                            color: isTrackActive ? 'var(--apple-pink)' : '#ffffff',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}>
-                            {track.title}
-                          </div>
-                          <div style={{ fontSize: '0.78125rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {track.artist}
-                          </div>
-                        </div>
-
-                        <span style={{ fontSize: '0.78125rem', color: 'var(--text-tertiary)' }}>
-                          {formatTime(track.duration)}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {/* Playlists Quick Preview */}
@@ -846,38 +942,50 @@ export default function WorkspacePage() {
                   </button>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '1.25rem' }}>
-                  {playlists.slice(0, 4).map((pl) => (
-                    <div
-                      key={pl.id}
-                      onClick={() => {
-                        handleViewPlaylist(pl);
-                        setActiveTab('playlists');
-                      }}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      <div style={{
-                        width: '100%',
-                        aspectRatio: '1 / 1',
-                        borderRadius: 'var(--radius-lg)',
-                        background: getTrackGradient(pl.id),
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        marginBottom: '0.65rem',
-                        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
-                      }}>
-                        <FolderLock size={32} color="#ffffff" />
+                {loading ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '1.25rem' }}>
+                    {[1, 2, 3, 4].map((i) => (
+                      <div key={i}>
+                        <div className="apple-skeleton" style={{ width: '100%', aspectRatio: '1 / 1', borderRadius: 'var(--radius-lg)', marginBottom: '0.65rem' }} />
+                        <div className="apple-skeleton" style={{ height: '14px', width: '80%', marginBottom: '6px' }} />
+                        <div className="apple-skeleton" style={{ height: '10px', width: '50%' }} />
                       </div>
-                      <div style={{ fontWeight: 600, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {pl.name}
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '1.25rem' }}>
+                    {playlists.slice(0, 4).map((pl) => (
+                      <div
+                        key={pl.id}
+                        onClick={() => {
+                          handleViewPlaylist(pl);
+                          setActiveTab('playlists');
+                        }}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <div style={{
+                          width: '100%',
+                          aspectRatio: '1 / 1',
+                          borderRadius: 'var(--radius-lg)',
+                          background: getTrackGradient(pl.id),
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          marginBottom: '0.65rem',
+                          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
+                        }}>
+                          <FolderLock size={32} color="#ffffff" />
+                        </div>
+                        <div style={{ fontWeight: 600, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {pl.name}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                          {pl.trackCount} Songs • {pl.visibility}
+                        </div>
                       </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
-                        {pl.trackCount} Songs • {pl.visibility}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -888,7 +996,7 @@ export default function WorkspacePage() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1.5rem' }}>
                 <div>
                   <h1 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.03em' }}>Songs</h1>
-                  <p style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)' }}>{filteredTracks.length} tracks in personal cloud</p>
+                  <p style={{ fontSize: '0.875rem', color: 'var(--text-tertiary)' }}>{tracks.length} tracks in personal cloud</p>
                 </div>
                 <button
                   onClick={() => {
@@ -902,7 +1010,21 @@ export default function WorkspacePage() {
                 </button>
               </div>
 
-              {filteredTracks.length === 0 ? (
+              {loading ? (
+                /* Shimmer Skeletons for Track List */
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.85rem 0.5rem' }}>
+                      <div className="apple-skeleton" style={{ width: '2.75rem', height: '2.75rem', borderRadius: '0.5rem', flexShrink: 0 }} />
+                      <div style={{ flex: 1 }}>
+                        <div className="apple-skeleton" style={{ height: '14px', width: '55%', marginBottom: '8px' }} />
+                        <div className="apple-skeleton" style={{ height: '10px', width: '35%' }} />
+                      </div>
+                      <div className="apple-skeleton" style={{ width: '40px', height: '12px' }} />
+                    </div>
+                  ))}
+                </div>
+              ) : filteredTracks.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '4rem 1rem', color: 'var(--text-secondary)' }}>
                   <Music size={48} style={{ margin: '0 auto 1rem', opacity: 0.3 }} />
                   <h3>No Songs Found</h3>
@@ -912,7 +1034,7 @@ export default function WorkspacePage() {
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  {filteredTracks.map((track, idx) => {
+                  {filteredTracks.map((track) => {
                     const isTrackActive = currentTrack?.id === track.id;
                     return (
                       <div
@@ -940,7 +1062,9 @@ export default function WorkspacePage() {
                           justifyContent: 'center',
                           flexShrink: 0,
                         }}>
-                          {isTrackActive && isPlaying ? (
+                          {isTrackActive && isBuffering ? (
+                            <Loader2 size={16} className="animate-spin" color="#ffffff" />
+                          ) : isTrackActive && isPlaying ? (
                             <Pause size={16} fill="#ffffff" color="#ffffff" />
                           ) : (
                             <Play size={16} fill="#ffffff" color="#ffffff" style={{ marginLeft: '2px' }} />
@@ -964,12 +1088,21 @@ export default function WorkspacePage() {
                           </div>
                         </div>
 
+                        {/* Animated Equalizer if active */}
+                        {isTrackActive && isPlaying && (
+                          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '14px', marginRight: '0.5rem' }}>
+                            <div className="eq-bar" />
+                            <div className="eq-bar" />
+                            <div className="eq-bar" />
+                          </div>
+                        )}
+
                         {/* Duration */}
                         <span style={{ fontSize: '0.8125rem', color: 'var(--text-tertiary)' }}>
                           {formatTime(track.duration)}
                         </span>
 
-                        {/* Action buttons */}
+                        {/* Actions */}
                         <div style={{ display: 'flex', gap: '0.25rem' }} onClick={(e) => e.stopPropagation()}>
                           <button
                             onClick={() => setTrackToAddToPlaylist(track)}
@@ -1076,7 +1209,19 @@ export default function WorkspacePage() {
                   </div>
 
                   {/* Playlist Songs */}
-                  {playlistTracks.length === 0 ? (
+                  {playlistLoading ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      {[1, 2, 3].map((i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.8rem 0.5rem' }}>
+                          <div className="apple-skeleton" style={{ width: '2.5rem', height: '2.5rem', borderRadius: '0.5rem' }} />
+                          <div style={{ flex: 1 }}>
+                            <div className="apple-skeleton" style={{ height: '14px', width: '50%', marginBottom: '6px' }} />
+                            <div className="apple-skeleton" style={{ height: '10px', width: '30%' }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : playlistTracks.length === 0 ? (
                     <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-tertiary)' }}>
                       No songs in this playlist yet. Add songs from your Library.
                     </div>
@@ -1104,7 +1249,9 @@ export default function WorkspacePage() {
                             alignItems: 'center',
                             justifyContent: 'center',
                           }}>
-                            {currentTrack?.id === pt.id && isPlaying ? (
+                            {currentTrack?.id === pt.id && isBuffering ? (
+                              <Loader2 size={14} className="animate-spin" color="#ffffff" />
+                            ) : currentTrack?.id === pt.id && isPlaying ? (
                               <Pause size={14} fill="#ffffff" color="#ffffff" />
                             ) : (
                               <Play size={14} fill="#ffffff" color="#ffffff" style={{ marginLeft: '2px' }} />
@@ -1142,35 +1289,47 @@ export default function WorkspacePage() {
                     </button>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1.25rem' }}>
-                    {playlists.map((pl) => (
-                      <div
-                        key={pl.id}
-                        onClick={() => handleViewPlaylist(pl)}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        <div style={{
-                          width: '100%',
-                          aspectRatio: '1 / 1',
-                          borderRadius: 'var(--radius-lg)',
-                          background: getTrackGradient(pl.id),
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          marginBottom: '0.75rem',
-                          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
-                        }}>
-                          <FolderLock size={44} color="#ffffff" />
+                  {loading ? (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1.25rem' }}>
+                      {[1, 2, 3, 4].map((i) => (
+                        <div key={i}>
+                          <div className="apple-skeleton" style={{ width: '100%', aspectRatio: '1 / 1', borderRadius: 'var(--radius-lg)', marginBottom: '0.75rem' }} />
+                          <div className="apple-skeleton" style={{ height: '14px', width: '70%', marginBottom: '6px' }} />
+                          <div className="apple-skeleton" style={{ height: '10px', width: '40%' }} />
                         </div>
-                        <div style={{ fontWeight: 600, fontSize: '0.9375rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {pl.name}
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1.25rem' }}>
+                      {playlists.map((pl) => (
+                        <div
+                          key={pl.id}
+                          onClick={() => handleViewPlaylist(pl)}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <div style={{
+                            width: '100%',
+                            aspectRatio: '1 / 1',
+                            borderRadius: 'var(--radius-lg)',
+                            background: getTrackGradient(pl.id),
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            marginBottom: '0.75rem',
+                            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
+                          }}>
+                            <FolderLock size={44} color="#ffffff" />
+                          </div>
+                          <div style={{ fontWeight: 600, fontSize: '0.9375rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {pl.name}
+                          </div>
+                          <div style={{ fontSize: '0.78125rem', color: 'var(--text-tertiary)' }}>
+                            {pl.trackCount} Songs • {pl.visibility}
+                          </div>
                         </div>
-                        <div style={{ fontSize: '0.78125rem', color: 'var(--text-tertiary)' }}>
-                          {pl.trackCount} Songs • {pl.visibility}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1184,7 +1343,7 @@ export default function WorkspacePage() {
                   Add to Music Vault
                 </h1>
                 <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-                  Upload high-quality audio files (MP3, FLAC, WAV, AAC, M4A)
+                  Upload high-quality audio files (stored persistently in your cloud vault)
                 </p>
               </div>
 
@@ -1252,7 +1411,14 @@ export default function WorkspacePage() {
                   disabled={!uploadFile || uploading}
                   style={{ width: '100%', padding: '0.9rem', fontSize: '1rem', justifyContent: 'center' }}
                 >
-                  {uploading ? 'Ingesting into Vault...' : 'Upload Song'}
+                  {uploading ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Loader2 size={18} className="animate-spin" />
+                      <span>Ingesting into Vault...</span>
+                    </div>
+                  ) : (
+                    'Upload Song'
+                  )}
                 </button>
               </form>
             </div>
@@ -1328,7 +1494,13 @@ export default function WorkspacePage() {
                 onClick={(e) => togglePlay(e)}
                 style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer', padding: '0.35rem' }}
               >
-                {isPlaying ? <Pause size={22} fill="#ffffff" /> : <Play size={22} fill="#ffffff" style={{ marginLeft: '2px' }} />}
+                {isBuffering ? (
+                  <Loader2 size={22} className="animate-spin" color="var(--apple-pink)" />
+                ) : isPlaying ? (
+                  <Pause size={22} fill="#ffffff" />
+                ) : (
+                  <Play size={22} fill="#ffffff" style={{ marginLeft: '2px' }} />
+                )}
               </button>
 
               <button
@@ -1451,7 +1623,13 @@ export default function WorkspacePage() {
                 boxShadow: '0 8px 24px rgba(255, 255, 255, 0.25)',
               }}
             >
-              {isPlaying ? <Pause size={32} fill="#000000" /> : <Play size={32} fill="#000000" style={{ marginLeft: '4px' }} />}
+              {isBuffering ? (
+                <Loader2 size={32} className="animate-spin" color="#000000" />
+              ) : isPlaying ? (
+                <Pause size={32} fill="#000000" />
+              ) : (
+                <Play size={32} fill="#000000" style={{ marginLeft: '4px' }} />
+              )}
             </button>
 
             <button
@@ -1656,10 +1834,11 @@ export default function WorkspacePage() {
                 </button>
                 <button
                   type="submit"
+                  disabled={creatingPlaylist}
                   className="btn-apple-primary"
                   style={{ flex: 1, justifyContent: 'center' }}
                 >
-                  Create
+                  {creatingPlaylist ? <Loader2 size={16} className="animate-spin" /> : 'Create'}
                 </button>
               </div>
             </form>
@@ -1695,12 +1874,17 @@ export default function WorkspacePage() {
                 playlists.filter((p) => p.isOwner).map((pl) => (
                   <button
                     key={pl.id}
+                    disabled={addingToPlaylistId === pl.id}
                     onClick={() => handleAddTrackToPlaylist(pl.id)}
                     className="btn-apple-secondary"
                     style={{ justifyContent: 'space-between', padding: '0.75rem 1rem', width: '100%' }}
                   >
                     <span>{pl.name}</span>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>{pl.trackCount} Songs</span>
+                    {addingToPlaylistId === pl.id ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>{pl.trackCount} Songs</span>
+                    )}
                   </button>
                 ))
               )}
