@@ -42,7 +42,9 @@ import {
   Minimize2,
   MessageSquareQuote,
   FileAudio,
+  Radio,
 } from 'lucide-react';
+import ExploreMusicView from './ExploreMusicView';
 
 interface CommunityUser {
   id: string;
@@ -66,6 +68,9 @@ interface Track {
   uploaderName?: string;
   uploaderDisplayName?: string;
   createdAt: number;
+  streamUrl?: string;
+  imageUrl?: string;
+  isOnlineStream?: boolean;
 }
 
 interface Playlist {
@@ -111,11 +116,13 @@ function getTrackGradient(id: string) {
 export default function WorkspacePage() {
   const router = useRouter();
   const [user, setUser] = useState<{ id: string; username: string; email: string; displayName?: string } | null>(null);
-  const [activeTab, setActiveTab] = useState<'listen' | 'tracks' | 'playlists' | 'upload' | 'profile'>('listen');
+  const [activeTab, setActiveTab] = useState<'listen' | 'explore' | 'tracks' | 'playlists' | 'upload' | 'profile'>('listen');
 
   // Data states
   const [tracks, setTracks] = useState<Track[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [onlineQueue, setOnlineQueue] = useState<Track[]>([]);
+  const [onlineBitrate, setOnlineBitrate] = useState<'96' | '160' | '320'>('96');
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -284,7 +291,13 @@ export default function WorkspacePage() {
         artist: currentTrack.artist,
         album: currentTrack.album || 'Vault Music',
         artwork: [
-          { src: '/icons/icon.svg', sizes: '512x512', type: 'image/svg+xml' },
+          {
+            src: currentTrack.imageUrl
+              ? `/api/jiosaavn/image?url=${encodeURIComponent(currentTrack.imageUrl)}`
+              : '/icons/icon.svg',
+            sizes: '512x512',
+            type: currentTrack.imageUrl ? 'image/jpeg' : 'image/svg+xml',
+          },
         ],
       });
 
@@ -347,7 +360,7 @@ export default function WorkspacePage() {
     setIsPlaying(true);
 
     if (audioRef.current) {
-      audioRef.current.src = `/api/tracks/${track.id}/stream`;
+      audioRef.current.src = track.streamUrl || `/api/tracks/${track.id}/stream`;
       audioRef.current.volume = isMuted ? 0 : volume;
       audioRef.current.load();
       audioRef.current.volume = isMuted ? 0 : volume;
@@ -423,23 +436,27 @@ export default function WorkspacePage() {
 
   function playNextTrack(e?: React.MouseEvent) {
     e?.stopPropagation();
-    if (!currentTrack || tracks.length === 0) return;
+    if (!currentTrack) return;
+    const pool = currentTrack.isOnlineStream && onlineQueue.length > 0 ? onlineQueue : tracks;
+    if (pool.length === 0) return;
     if (isShuffle) {
-      const randomIndex = Math.floor(Math.random() * tracks.length);
-      playTrack(tracks[randomIndex]);
+      const randomIndex = Math.floor(Math.random() * pool.length);
+      playTrack(pool[randomIndex]);
       return;
     }
-    const currentIndex = tracks.findIndex((t) => t.id === currentTrack.id);
-    const nextIndex = (currentIndex + 1) % tracks.length;
-    playTrack(tracks[nextIndex]);
+    const currentIndex = pool.findIndex((t) => t.id === currentTrack.id);
+    const nextIndex = (currentIndex + 1) % pool.length;
+    playTrack(pool[nextIndex]);
   }
 
   function playPrevTrack(e?: React.MouseEvent) {
     e?.stopPropagation();
-    if (!currentTrack || tracks.length === 0) return;
-    const currentIndex = tracks.findIndex((t) => t.id === currentTrack.id);
-    const prevIndex = (currentIndex - 1 + tracks.length) % tracks.length;
-    playTrack(tracks[prevIndex]);
+    if (!currentTrack) return;
+    const pool = currentTrack.isOnlineStream && onlineQueue.length > 0 ? onlineQueue : tracks;
+    if (pool.length === 0) return;
+    const currentIndex = pool.findIndex((t) => t.id === currentTrack.id);
+    const prevIndex = (currentIndex - 1 + pool.length) % pool.length;
+    playTrack(pool[prevIndex]);
   }
 
   // Batch Multi-File Upload handler with per-song progress tracking via XMLHttpRequest
@@ -908,6 +925,27 @@ export default function WorkspacePage() {
             >
               <Compass size={18} />
               <span>Listen Now</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('explore')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                padding: '0.6rem 0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                background: activeTab === 'explore' ? 'rgba(250, 36, 60, 0.15)' : 'transparent',
+                color: activeTab === 'explore' ? 'var(--apple-pink)' : 'var(--text-white)',
+                border: 'none',
+                fontWeight: activeTab === 'explore' ? 600 : 500,
+                fontSize: '0.875rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              <Radio size={18} />
+              <span>Explore Indian Music</span>
             </button>
 
             <button
@@ -1466,6 +1504,20 @@ export default function WorkspacePage() {
             </div>
           ) : (
             <>
+              {/* TAB: EXPLORE ONLINE INDIAN MUSIC (FIREWALL-PROOF STREAMING) */}
+              {activeTab === 'explore' && (
+                <ExploreMusicView
+                  currentTrack={currentTrack}
+                  isPlaying={isPlaying}
+                  isBuffering={isBuffering}
+                  onPlayTrack={playTrack}
+                  onAddToPlaylist={(trk) => setMenuTrack(trk)}
+                  onUpdateOnlineQueue={(queue) => setOnlineQueue(queue)}
+                  activeBitrate={onlineBitrate}
+                  onChangeBitrate={(br) => setOnlineBitrate(br)}
+                />
+              )}
+
               {/* TAB 1: LISTEN NOW (CLEAN HERO WITHOUT DUPLICATE "NOW STREAMING" BOX) */}
               {activeTab === 'listen' && (
             <div>
@@ -3443,15 +3495,24 @@ export default function WorkspacePage() {
                 width: '2.85rem',
                 height: '2.85rem',
                 borderRadius: '0.6rem',
-                background: getTrackGradient(currentTrack.id),
+                background: currentTrack.imageUrl ? 'none' : getTrackGradient(currentTrack.id),
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 flexShrink: 0,
                 boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
+                overflow: 'hidden',
               }}
             >
-              <Music size={18} fill="#ffffff" color="#ffffff" />
+              {currentTrack.imageUrl ? (
+                <img
+                  src={`/api/jiosaavn/image?url=${encodeURIComponent(currentTrack.imageUrl)}`}
+                  alt={currentTrack.title}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                />
+              ) : (
+                <Music size={18} fill="#ffffff" color="#ffffff" />
+              )}
             </div>
 
             <div style={{ overflow: 'hidden' }}>
@@ -3644,7 +3705,9 @@ export default function WorkspacePage() {
         style={{
           position: 'absolute',
           inset: '-20%',
-          background: getTrackGradient(currentTrack.id),
+          background: currentTrack.imageUrl
+            ? `url(/api/jiosaavn/image?url=${encodeURIComponent(currentTrack.imageUrl)}) center/cover no-repeat`
+            : getTrackGradient(currentTrack.id),
           filter: 'blur(120px) brightness(0.28) saturate(1.6)',
           opacity: 0.9,
           pointerEvents: 'none',
@@ -3753,7 +3816,7 @@ export default function WorkspacePage() {
             aspectRatio: '1 / 1',
             maxHeight: '46vh',
             borderRadius: '14px',
-            background: getTrackGradient(currentTrack.id),
+            background: currentTrack.imageUrl ? 'none' : getTrackGradient(currentTrack.id),
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -3764,7 +3827,15 @@ export default function WorkspacePage() {
             transition: 'transform 0.4s cubic-bezier(0.25, 1, 0.5, 1)',
           }}
         >
-          <Music size={80} fill="#ffffff" color="#ffffff" style={{ opacity: 0.95 }} />
+          {currentTrack.imageUrl ? (
+            <img
+              src={`/api/jiosaavn/image?url=${encodeURIComponent(currentTrack.imageUrl)}`}
+              alt={currentTrack.title}
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            />
+          ) : (
+            <Music size={80} fill="#ffffff" color="#ffffff" style={{ opacity: 0.95 }} />
+          )}
 
           {/* Specular gloss highlight */}
           <div
@@ -4066,6 +4137,25 @@ export default function WorkspacePage() {
         </button>
 
         <button
+          onClick={() => setActiveTab('explore')}
+          style={{
+            background: 'none',
+            border: 'none',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '0.2rem',
+            color: activeTab === 'explore' ? 'var(--apple-pink)' : 'var(--text-tertiary)',
+            cursor: 'pointer',
+            fontSize: '0.65rem',
+            fontWeight: 600,
+          }}
+        >
+          <Radio size={20} />
+          <span>Explore</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('tracks')}
           style={{
             background: 'none',
@@ -4341,13 +4431,22 @@ export default function WorkspacePage() {
                 width: '3rem',
                 height: '3rem',
                 borderRadius: '0.6rem',
-                background: getTrackGradient(menuTrack.id),
+                background: menuTrack.imageUrl ? 'none' : getTrackGradient(menuTrack.id),
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 flexShrink: 0,
+                overflow: 'hidden',
               }}>
-                <Music size={20} fill="#ffffff" color="#ffffff" />
+                {menuTrack.imageUrl ? (
+                  <img
+                    src={`/api/jiosaavn/image?url=${encodeURIComponent(menuTrack.imageUrl)}`}
+                    alt={menuTrack.title}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                  />
+                ) : (
+                  <Music size={20} fill="#ffffff" color="#ffffff" />
+                )}
               </div>
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 <div style={{ fontWeight: 700, fontSize: '0.95rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
