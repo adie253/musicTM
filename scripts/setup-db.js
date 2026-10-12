@@ -77,6 +77,16 @@ async function main() {
     );
   `);
 
+  await client.execute(`
+    CREATE TABLE IF NOT EXISTS favorites (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      track_id TEXT NOT NULL,
+      track_data TEXT,
+      created_at INTEGER NOT NULL
+    );
+  `);
+
   const res = await client.execute("SELECT name FROM sqlite_master WHERE type='table';");
   console.log('✅ Turso Database ready with tables:', res.rows.map(r => r.name));
 }

@@ -44,6 +44,14 @@ export const playlistTracks = sqliteTable('playlist_tracks', {
   addedAt: integer('added_at').notNull(),
 });
 
+export const favorites = sqliteTable('favorites', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  trackId: text('track_id').notNull(),
+  trackData: text('track_data'), // JSON stringified metadata for online & vault songs
+  createdAt: integer('created_at').notNull(),
+});
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Track = typeof tracks.$inferSelect;
@@ -51,3 +59,5 @@ export type NewTrack = typeof tracks.$inferInsert;
 export type Playlist = typeof playlists.$inferSelect;
 export type NewPlaylist = typeof playlists.$inferInsert;
 export type PlaylistTrack = typeof playlistTracks.$inferSelect;
+export type Favorite = typeof favorites.$inferSelect;
+export type NewFavorite = typeof favorites.$inferInsert;

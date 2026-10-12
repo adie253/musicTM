@@ -43,6 +43,7 @@ import {
   MessageSquareQuote,
   FileAudio,
   Radio,
+  Infinity,
 } from 'lucide-react';
 import ExploreMusicView from './ExploreMusicView';
 
@@ -116,11 +117,13 @@ function getTrackGradient(id: string) {
 export default function WorkspacePage() {
   const router = useRouter();
   const [user, setUser] = useState<{ id: string; username: string; email: string; displayName?: string } | null>(null);
-  const [activeTab, setActiveTab] = useState<'listen' | 'explore' | 'tracks' | 'playlists' | 'upload' | 'profile'>('listen');
+  const [activeTab, setActiveTab] = useState<'listen' | 'explore' | 'tracks' | 'playlists' | 'favorites' | 'upload' | 'profile'>('listen');
 
   // Data states
   const [tracks, setTracks] = useState<Track[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [favoriteTracks, setFavoriteTracks] = useState<Track[]>([]);
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [onlineQueue, setOnlineQueue] = useState<Track[]>([]);
   const [onlineBitrate, setOnlineBitrate] = useState<'96' | '160' | '320'>('96');
   const [searchQuery, setSearchQuery] = useState('');
@@ -130,6 +133,8 @@ export default function WorkspacePage() {
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
+  const [isAutoplayEnabled, setIsAutoplayEnabled] = useState(true);
+  const [historyIds, setHistoryIds] = useState<Set<string>>(new Set());
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -201,7 +206,7 @@ export default function WorkspacePage() {
         const userData = await userRes.json();
         setUser(userData.user);
 
-        await Promise.all([loadTracks(), loadPlaylists(), loadUsers()]);
+        await Promise.all([loadTracks(), loadPlaylists(), loadUsers(), loadFavorites()]);
       } catch (err) {
         console.error('Initialization error:', err);
       } finally {
@@ -246,6 +251,195 @@ export default function WorkspacePage() {
       console.error('Failed to load playlists', e);
     }
   }
+
+  async function loadFavorites() {
+    try {
+      const res = await fetch('/api/favorites');
+      if (res.ok) {
+        const data = await res.json();
+        setFavoriteTracks(data.tracks || []);
+        setFavoriteIds(new Set(data.favoriteIds || []));
+      }
+    } catch (e) {
+      console.error('Failed to load favorites', e);
+    }
+  }
+
+  async function toggleFavorite(track: Track) {
+    if (!track) return;
+    const isCurrentlyFav = favoriteIds.has(track.id);
+
+    setFavoriteIds((prev) => {
+      const next = new Set(prev);
+      if (isCurrentlyFav) {
+        next.delete(track.id);
+      } else {
+        next.add(track.id);
+      }
+      return next;
+    });
+
+    if (currentTrack?.id === track.id) {
+      setIsFavorited(!isCurrentlyFav);
+    }
+
+    if (isCurrentlyFav) {
+      setFavoriteTracks((prev) => prev.filter((t) => t.id !== track.id));
+    } else {
+      setFavoriteTracks((prev) => [track, ...prev]);
+    }
+
+    try {
+      const res = await fetch('/api/favorites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          trackId: track.id,
+          trackData: {
+            id: track.id,
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            duration: track.duration,
+            fileSize: track.fileSize,
+            fileName: track.fileName,
+            visibility: track.visibility,
+            streamUrl: track.streamUrl,
+            imageUrl: track.imageUrl,
+            isOnlineStream: track.isOnlineStream,
+          },
+        }),
+      });
+
+      if (!res.ok) {
+        loadFavorites();
+      }
+    } catch (err) {
+      console.error('Error toggling favorite:', err);
+      loadFavorites();
+    }
+  }
+
+  // Smart Next-Song Suggestion & Radio generator
+  async function handleStartRadio(seedTrack: Track) {
+    if (!seedTrack) return;
+    setIsBuffering(true);
+    playTrack(seedTrack);
+
+    try {
+      const res = await fetch(
+        `/api/jiosaavn/recommend?title=${encodeURIComponent(seedTrack.title)}&artist=${encodeURIComponent(
+          seedTrack.artist
+        )}&album=${encodeURIComponent(seedTrack.album || '')}&id=${encodeURIComponent(seedTrack.id)}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const recs = data.results || [];
+        if (recs.length > 0) {
+          const mappedRecs: Track[] = recs.map((song: any) => {
+            const rawMediaUrl = song.mediaUrls[onlineBitrate] || song.mediaUrls['96'];
+            return {
+              id: `saavn_${song.id}`,
+              title: song.title,
+              artist: song.artist,
+              album: song.album || 'Smart Radio',
+              duration: song.duration,
+              fileSize: Math.round(song.duration * 12000),
+              visibility: 'public',
+              uploaderName: 'Smart Radio',
+              createdAt: Date.now(),
+              streamUrl: `/api/jiosaavn/stream?url=${encodeURIComponent(rawMediaUrl)}&bitrate=${onlineBitrate}`,
+              imageUrl: song.image,
+              isOnlineStream: true,
+            };
+          });
+
+          setOnlineQueue([seedTrack, ...mappedRecs]);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to start radio:', e);
+    } finally {
+      setIsBuffering(false);
+    }
+  }
+
+  // Autoplay Song Ended handler
+  async function handleSongEnded() {
+    if (isLooping) {
+      if (audioRef.current) {
+        audioRef.current.currentTime = 0;
+        audioRef.current.play();
+      }
+      return;
+    }
+
+    if (!currentTrack) return;
+
+    setHistoryIds((prev) => new Set([...prev, currentTrack.id]));
+
+    const pool = currentTrack.isOnlineStream && onlineQueue.length > 0 ? onlineQueue : tracks;
+    const currentIndex = pool.findIndex((t) => t.id === currentTrack.id);
+
+    if (currentIndex !== -1 && currentIndex < pool.length - 1) {
+      playTrack(pool[currentIndex + 1]);
+      return;
+    }
+
+    if (isAutoplayEnabled) {
+      setIsBuffering(true);
+      try {
+        const res = await fetch(
+          `/api/jiosaavn/recommend?title=${encodeURIComponent(currentTrack.title)}&artist=${encodeURIComponent(
+            currentTrack.artist
+          )}&album=${encodeURIComponent(currentTrack.album || '')}&id=${encodeURIComponent(currentTrack.id)}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const recs = data.results || [];
+          if (recs.length > 0) {
+            const mappedRecs: Track[] = recs.map((song: any) => {
+              const rawMediaUrl = song.mediaUrls[onlineBitrate] || song.mediaUrls['96'];
+              return {
+                id: `saavn_${song.id}`,
+                title: song.title,
+                artist: song.artist,
+                album: song.album || 'Smart Autoplay',
+                duration: song.duration,
+                fileSize: Math.round(song.duration * 12000),
+                visibility: 'public',
+                uploaderName: 'Smart Autoplay',
+                createdAt: Date.now(),
+                streamUrl: `/api/jiosaavn/stream?url=${encodeURIComponent(rawMediaUrl)}&bitrate=${onlineBitrate}`,
+                imageUrl: song.image,
+                isOnlineStream: true,
+              };
+            });
+
+            const freshRecs = mappedRecs.filter((t) => !historyIds.has(t.id));
+            const nextBatch = freshRecs.length > 0 ? freshRecs : mappedRecs;
+
+            setOnlineQueue((prev) => [...prev, ...nextBatch]);
+            playTrack(nextBatch[0]);
+            return;
+          }
+        }
+      } catch (err) {
+        console.error('Autoplay recommendation error:', err);
+      } finally {
+        setIsBuffering(false);
+      }
+    }
+
+    playNextTrack();
+  }
+
+  // Keep isFavorited in sync
+  useEffect(() => {
+    if (currentTrack) {
+      setIsFavorited(favoriteIds.has(currentTrack.id));
+    }
+  }, [currentTrack, favoriteIds]);
 
   async function handleLogout() {
     await fetch('/api/auth/logout', { method: 'POST' });
@@ -807,7 +1001,7 @@ export default function WorkspacePage() {
           }
         }}
         onEnded={() => {
-          if (!isLooping) playNextTrack();
+          handleSongEnded();
         }}
         onError={() => {
           setIsBuffering(false);
@@ -988,6 +1182,27 @@ export default function WorkspacePage() {
             >
               <ListMusic size={18} />
               <span>Playlists ({playlists.length})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('favorites')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                padding: '0.6rem 0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                background: activeTab === 'favorites' ? 'rgba(250, 36, 60, 0.15)' : 'transparent',
+                color: activeTab === 'favorites' ? 'var(--apple-pink)' : 'var(--text-white)',
+                border: 'none',
+                fontWeight: activeTab === 'favorites' ? 600 : 500,
+                fontSize: '0.875rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              <Heart size={18} fill={activeTab === 'favorites' ? 'var(--apple-pink)' : 'none'} />
+              <span>Favorites ({favoriteTracks.length})</span>
             </button>
 
             <button
@@ -1300,16 +1515,31 @@ export default function WorkspacePage() {
                   </p>
                 </div>
 
-                <button
-                  onClick={() => {
-                    setSearchQuery('');
-                    setSelectedUserFilter(null);
-                  }}
-                  className="btn-apple-secondary"
-                  style={{ fontSize: '0.8125rem' }}
-                >
-                  ✕ Clear Search
-                </button>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  {searchQuery.trim().length > 0 && (
+                    <button
+                      onClick={() => {
+                        setActiveTab('explore');
+                      }}
+                      className="btn-apple-primary"
+                      style={{ fontSize: '0.8125rem' }}
+                    >
+                      <Globe size={14} />
+                      <span>Search 80M+ Online Catalog</span>
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => {
+                      setSearchQuery('');
+                      setSelectedUserFilter(null);
+                    }}
+                    className="btn-apple-secondary"
+                    style={{ fontSize: '0.8125rem' }}
+                  >
+                    ✕ Clear Search
+                  </button>
+                </div>
               </div>
 
               {/* SECTION 1: COMMUNITY MEMBERS / USERS */}
@@ -1515,7 +1745,247 @@ export default function WorkspacePage() {
                   onUpdateOnlineQueue={(queue) => setOnlineQueue(queue)}
                   activeBitrate={onlineBitrate}
                   onChangeBitrate={(br) => setOnlineBitrate(br)}
+                  favoriteIds={favoriteIds}
+                  onToggleFavorite={toggleFavorite}
+                  onStartRadio={handleStartRadio}
                 />
+              )}
+
+              {/* TAB: FAVORITES / LIKED SONGS */}
+              {activeTab === 'favorites' && (
+                <div>
+                  <div
+                    style={{
+                      borderRadius: 'var(--radius-xl)',
+                      background: 'linear-gradient(135deg, #2a0818 0%, #4a0e28 50%, #fa243c 100%)',
+                      padding: '2.5rem 2rem',
+                      position: 'relative',
+                      overflow: 'hidden',
+                      marginBottom: '2rem',
+                      boxShadow: '0 16px 40px rgba(250, 36, 60, 0.25)',
+                    }}
+                  >
+                    <div style={{ maxWidth: '520px', position: 'relative', zIndex: 2 }}>
+                      <div
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.45rem',
+                          padding: '0.35rem 0.85rem',
+                          borderRadius: 'var(--radius-full)',
+                          background: 'rgba(255, 255, 255, 0.15)',
+                          color: '#ffffff',
+                          fontSize: '0.75rem',
+                          fontWeight: 700,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.05em',
+                          marginBottom: '1rem',
+                        }}
+                      >
+                        <Heart size={14} fill="#ffffff" />
+                        <span>Your Curated Vault</span>
+                      </div>
+
+                      <h1
+                        style={{
+                          fontSize: 'clamp(1.75rem, 3.5vw, 2.5rem)',
+                          fontWeight: 800,
+                          marginBottom: '0.5rem',
+                          color: '#ffffff',
+                        }}
+                      >
+                        Favorite Songs
+                      </h1>
+
+                      <p
+                        style={{
+                          fontSize: '0.95rem',
+                          color: 'rgba(255, 255, 255, 0.82)',
+                          marginBottom: '1.5rem',
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        {favoriteTracks.length} {favoriteTracks.length === 1 ? 'song' : 'songs'} you love. Play your collection anytime with 1-click.
+                      </p>
+
+                      {favoriteTracks.length > 0 && (
+                        <div style={{ display: 'flex', gap: '0.75rem' }}>
+                          <button
+                            onClick={() => {
+                              if (favoriteTracks.length > 0) {
+                                setOnlineQueue(favoriteTracks);
+                                playTrack(favoriteTracks[0]);
+                              }
+                            }}
+                            className="btn-apple-primary"
+                          >
+                            <Play size={16} fill="currentColor" />
+                            <span>Play All</span>
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              if (favoriteTracks.length > 0) {
+                                setOnlineQueue(favoriteTracks);
+                                const randomIdx = Math.floor(Math.random() * favoriteTracks.length);
+                                playTrack(favoriteTracks[randomIdx]);
+                              }
+                            }}
+                            className="btn-apple-secondary"
+                          >
+                            <Shuffle size={16} />
+                            <span>Shuffle</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {favoriteTracks.length === 0 ? (
+                    <div
+                      className="apple-glass"
+                      style={{
+                        padding: '4rem 2rem',
+                        textAlign: 'center',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        gap: '1rem',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: '4rem',
+                          height: '4rem',
+                          borderRadius: '50%',
+                          background: 'rgba(250, 36, 60, 0.12)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <Heart size={32} color="var(--apple-pink)" />
+                      </div>
+                      <div style={{ fontWeight: 700, fontSize: '1.2rem' }}>No Favorite Songs Yet</div>
+                      <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', maxWidth: '380px' }}>
+                        Tap the heart icon on any song in Community or Explore to save it to your favorites.
+                      </div>
+                      <button onClick={() => setActiveTab('explore')} className="btn-apple-primary" style={{ marginTop: '0.5rem' }}>
+                        Explore Songs
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      {favoriteTracks.map((trk, idx) => {
+                        const isTrackActive = currentTrack?.id === trk.id;
+                        const isTrackPlaying = isTrackActive && isPlaying;
+                        return (
+                          <div
+                            key={trk.id}
+                            onClick={() => {
+                              setOnlineQueue(favoriteTracks);
+                              playTrack(trk);
+                            }}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              padding: '0.75rem 1rem',
+                              borderRadius: 'var(--radius-md)',
+                              background: isTrackActive ? 'rgba(250, 36, 60, 0.12)' : 'rgba(255, 255, 255, 0.03)',
+                              border: isTrackActive ? '1px solid rgba(250, 36, 60, 0.4)' : '1px solid transparent',
+                              cursor: 'pointer',
+                              transition: 'background 0.15s ease',
+                              gap: '1rem',
+                            }}
+                            onMouseEnter={(e) => {
+                              if (!isTrackActive) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.06)';
+                            }}
+                            onMouseLeave={(e) => {
+                              if (!isTrackActive) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.03)';
+                            }}
+                          >
+                            <div style={{ width: '1.5rem', textAlign: 'center', fontSize: '0.85rem', color: isTrackActive ? 'var(--apple-pink)' : 'var(--text-tertiary)', fontWeight: 600 }}>
+                              {isTrackPlaying ? '▶' : idx + 1}
+                            </div>
+
+                            <div
+                              style={{
+                                width: '2.75rem',
+                                height: '2.75rem',
+                                borderRadius: 'var(--radius-sm)',
+                                overflow: 'hidden',
+                                background: trk.imageUrl ? 'none' : getTrackGradient(trk.id),
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                flexShrink: 0,
+                              }}
+                            >
+                              {trk.imageUrl ? (
+                                <img
+                                  src={`/api/jiosaavn/image?url=${encodeURIComponent(trk.imageUrl)}`}
+                                  alt={trk.title}
+                                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                />
+                              ) : (
+                                <Music size={18} fill="#ffffff" color="#ffffff" />
+                              )}
+                            </div>
+
+                            <div style={{ flex: 1, overflow: 'hidden' }}>
+                              <div
+                                style={{
+                                  fontWeight: 600,
+                                  fontSize: '0.925rem',
+                                  color: isTrackActive ? 'var(--apple-pink)' : '#ffffff',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {trk.title}
+                              </div>
+                              <div
+                                style={{
+                                  fontSize: '0.8rem',
+                                  color: 'var(--text-secondary)',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {trk.artist} {trk.album ? `• ${trk.album}` : ''}
+                              </div>
+                            </div>
+
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
+                              {formatTime(trk.duration)}
+                            </div>
+
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleFavorite(trk);
+                              }}
+                              title="Remove from favorites"
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: 'var(--apple-pink)',
+                                padding: '0.4rem',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                              }}
+                            >
+                              <Heart size={18} fill="var(--apple-pink)" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               )}
 
               {/* TAB 1: LISTEN NOW (CLEAN HERO WITHOUT DUPLICATE "NOW STREAMING" BOX) */}
@@ -3523,12 +3993,61 @@ export default function WorkspacePage() {
                 {currentTrack.artist} • By @{currentTrack.uploaderName || 'Vault'}
               </div>
             </div>
+
+            {/* Favorite Heart Button */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (currentTrack) toggleFavorite(currentTrack);
+              }}
+              title={isFavorited ? 'Remove from Favorites' : 'Add to Favorites'}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: isFavorited ? 'var(--apple-pink)' : 'var(--text-tertiary)',
+                padding: '0.35rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                transition: 'transform 0.15s ease, color 0.15s ease',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.15)')}
+              onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+            >
+              <Heart size={18} fill={isFavorited ? 'var(--apple-pink)' : 'none'} />
+            </button>
           </div>
 
           {/* Center/Right: Full Playback Transport Controls */}
           <div
             style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
           >
+            {/* Autoplay Toggle */}
+            <button
+              onClick={() => setIsAutoplayEnabled(!isAutoplayEnabled)}
+              title={isAutoplayEnabled ? 'Autoplay On (Similar songs will play automatically)' : 'Autoplay Off'}
+              className="desktop-only"
+              style={{
+                background: isAutoplayEnabled ? 'rgba(250, 36, 60, 0.15)' : 'none',
+                border: 'none',
+                borderRadius: 'var(--radius-sm)',
+                color: isAutoplayEnabled ? 'var(--apple-pink)' : 'var(--text-tertiary)',
+                padding: '0.35rem 0.5rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <Infinity size={15} />
+              <span>Autoplay</span>
+            </button>
+
             {/* Shuffle toggle */}
             <button
               onClick={() => setIsShuffle(!isShuffle)}
@@ -3902,6 +4421,51 @@ export default function WorkspacePage() {
             <path d="M2 12c2.5-6 5.5-6 8 0s5.5 6 8 0 3.5-3 4-3" />
           </svg>
           <span>Lossless</span>
+        </div>
+
+        {/* ACTION CHIPS: FAVORITE & START RADIO */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.65rem', marginTop: '0.85rem' }}>
+          <button
+            onClick={() => toggleFavorite(currentTrack)}
+            style={{
+              background: isFavorited ? 'rgba(250, 36, 60, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+              border: `1px solid ${isFavorited ? 'var(--apple-pink)' : 'rgba(255, 255, 255, 0.15)'}`,
+              borderRadius: 'var(--radius-full)',
+              padding: '0.45rem 1.1rem',
+              color: isFavorited ? 'var(--apple-pink)' : '#ffffff',
+              fontSize: '0.8125rem',
+              fontWeight: 600,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <Heart size={15} fill={isFavorited ? 'var(--apple-pink)' : 'none'} />
+            <span>{isFavorited ? 'Favorited' : 'Favorite'}</span>
+          </button>
+
+          <button
+            onClick={() => handleStartRadio(currentTrack)}
+            style={{
+              background: 'rgba(255, 255, 255, 0.08)',
+              border: '1px solid rgba(255, 255, 255, 0.15)',
+              borderRadius: 'var(--radius-full)',
+              padding: '0.45rem 1.1rem',
+              color: '#ffffff',
+              fontSize: '0.8125rem',
+              fontWeight: 600,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <Radio size={15} color="var(--apple-pink)" />
+            <span>Start Radio</span>
+          </button>
         </div>
 
         {/* TIMELINE SCRUBBER */}
@@ -4485,6 +5049,39 @@ export default function WorkspacePage() {
               >
                 <Plus size={16} />
                 <span>Add to Playlist...</span>
+              </button>
+
+              {/* Start Radio */}
+              <button
+                onClick={() => {
+                  handleStartRadio(menuTrack);
+                  setMenuTrack(null);
+                }}
+                className="btn-apple-secondary"
+                style={{ justifyContent: 'flex-start', padding: '0.7rem 0.85rem', width: '100%', gap: '0.75rem', fontSize: '0.875rem' }}
+              >
+                <Radio size={16} color="var(--apple-pink)" />
+                <span>Start Radio</span>
+              </button>
+
+              {/* Add / Remove Favorite */}
+              <button
+                onClick={() => {
+                  toggleFavorite(menuTrack);
+                  setMenuTrack(null);
+                }}
+                className="btn-apple-secondary"
+                style={{
+                  justifyContent: 'flex-start',
+                  padding: '0.7rem 0.85rem',
+                  width: '100%',
+                  gap: '0.75rem',
+                  fontSize: '0.875rem',
+                  color: favoriteIds.has(menuTrack.id) ? 'var(--apple-pink)' : '#ffffff',
+                }}
+              >
+                <Heart size={16} fill={favoriteIds.has(menuTrack.id) ? 'var(--apple-pink)' : 'none'} />
+                <span>{favoriteIds.has(menuTrack.id) ? 'Remove from Favorites' : 'Add to Favorites'}</span>
               </button>
 
               {/* Toggle Public / Private (If Owner) */}

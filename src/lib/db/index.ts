@@ -92,5 +92,15 @@ export async function ensureDbInitialized() {
     );
   `);
 
+  await client.execute(`
+    CREATE TABLE IF NOT EXISTS favorites (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      track_id TEXT NOT NULL,
+      track_data TEXT,
+      created_at INTEGER NOT NULL
+    );
+  `);
+
   initialized = true;
 }

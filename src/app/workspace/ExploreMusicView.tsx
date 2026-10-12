@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Search,
   Play,
@@ -15,6 +15,12 @@ import {
   Check,
   Disc3,
   Sliders,
+  Heart,
+  Radio,
+  User,
+  Folder,
+  ArrowRight,
+  ChevronDown,
 } from 'lucide-react';
 import type { JioSaavnSong } from '@/lib/jiosaavn';
 
@@ -45,6 +51,9 @@ interface ExploreMusicViewProps {
   onUpdateOnlineQueue: (tracks: WorkspaceTrack[]) => void;
   activeBitrate: '96' | '160' | '320';
   onChangeBitrate: (bitrate: '96' | '160' | '320') => void;
+  favoriteIds?: Set<string>;
+  onToggleFavorite?: (track: WorkspaceTrack) => void;
+  onStartRadio?: (track: WorkspaceTrack) => void;
 }
 
 const PRESET_CHIPS = [
@@ -67,8 +76,12 @@ export default function ExploreMusicView({
   onUpdateOnlineQueue,
   activeBitrate,
   onChangeBitrate,
+  favoriteIds,
+  onToggleFavorite,
+  onStartRadio,
 }: ExploreMusicViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeQuery, setActiveQuery] = useState('');
   const [selectedChip, setSelectedChip] = useState('🔥 Trending Hits');
   const [songs, setSongs] = useState<JioSaavnSong[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,14 +89,76 @@ export default function ExploreMusicView({
   const [error, setError] = useState<string | null>(null);
   const [addedIds, setAddedIds] = useState<Record<string, boolean>>({});
 
+  // Infinite Pagination state
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  // Autocomplete live suggestion state
+  const [suggestions, setSuggestions] = useState<{
+    songs: Array<{ id: string; title: string; subtitle: string; image: string }>;
+    artists: Array<{ id: string; title: string; subtitle: string; image: string }>;
+    albums: Array<{ id: string; title: string; subtitle: string; image: string }>;
+  } | null>(null);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const searchContainerRef = useRef<HTMLDivElement | null>(null);
+
   // Fetch trending songs initially
   useEffect(() => {
     loadTrending();
   }, []);
 
+  // Live autocomplete debouncer
+  useEffect(() => {
+    if (!searchQuery || searchQuery.trim().length < 2) {
+      setSuggestions(null);
+      setShowSuggestions(false);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/jiosaavn/autocomplete?q=${encodeURIComponent(searchQuery.trim())}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (
+            (data.songs?.length || data.artists?.length || data.albums?.length) &&
+            searchQuery.trim().length >= 2
+          ) {
+            setSuggestions(data);
+            setShowSuggestions(true);
+          }
+        }
+      } catch (err) {
+        console.warn('Autocomplete fetch error:', err);
+      }
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Click outside listener for suggestions dropdown
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (
+        searchContainerRef.current &&
+        !searchContainerRef.current.contains(e.target as Node)
+      ) {
+        setShowSuggestions(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   async function loadTrending() {
     setLoading(true);
     setError(null);
+    setActiveQuery('');
+    setPage(1);
+    setHasMore(false);
     try {
       const res = await fetch('/api/jiosaavn/trending?limit=30');
       const data = await res.json();
@@ -101,28 +176,61 @@ export default function ExploreMusicView({
   }
 
   async function handleSearch(queryToSearch: string) {
-    if (!queryToSearch.trim()) {
+    setShowSuggestions(false);
+    const cleanQuery = queryToSearch.trim();
+
+    if (!cleanQuery) {
       loadTrending();
       return;
     }
 
     setSearching(true);
     setError(null);
+    setActiveQuery(cleanQuery);
+    setPage(1);
+    setHasMore(true);
+
     try {
       const res = await fetch(
-        `/api/jiosaavn/search?q=${encodeURIComponent(queryToSearch.trim())}&limit=35`
+        `/api/jiosaavn/search?q=${encodeURIComponent(cleanQuery)}&page=1&limit=30`
       );
       const data = await res.json();
       if (data.success && Array.isArray(data.results)) {
         setSongs(data.results);
+        setHasMore(data.results.length >= 20);
       } else {
         setSongs([]);
+        setHasMore(false);
       }
     } catch (err) {
       console.error('Search failed:', err);
       setError('Search failed. Please try again.');
     } finally {
       setSearching(false);
+    }
+  }
+
+  async function handleLoadMore() {
+    if (loadingMore || !hasMore || !activeQuery) return;
+    setLoadingMore(true);
+    const nextPage = page + 1;
+
+    try {
+      const res = await fetch(
+        `/api/jiosaavn/search?q=${encodeURIComponent(activeQuery)}&page=${nextPage}&limit=30`
+      );
+      const data = await res.json();
+      if (data.success && Array.isArray(data.results) && data.results.length > 0) {
+        setSongs((prev) => [...prev, ...data.results]);
+        setPage(nextPage);
+        setHasMore(data.results.length >= 20);
+      } else {
+        setHasMore(false);
+      }
+    } catch (e) {
+      console.error('Load more failed', e);
+    } finally {
+      setLoadingMore(false);
     }
   }
 
@@ -145,7 +253,6 @@ export default function ExploreMusicView({
       rawMediaUrl
     )}&bitrate=${activeBitrate}`;
 
-    // Estimated file size in bytes
     const estimatedKbps = activeBitrate === '96' ? 12 : activeBitrate === '160' ? 20 : 40;
     const estimatedBytes = song.duration * estimatedKbps * 1024;
 
@@ -170,7 +277,6 @@ export default function ExploreMusicView({
 
   function playSong(song: JioSaavnSong) {
     const trk = mapToWorkspaceTrack(song);
-    // Update queue with all current songs
     const fullQueue = songs.map(mapToWorkspaceTrack);
     onUpdateOnlineQueue(fullQueue);
     onPlayTrack(trk);
@@ -204,7 +310,6 @@ export default function ExploreMusicView({
           border: '1px solid rgba(255, 255, 255, 0.1)',
         }}
       >
-        {/* Subtle decorative glow orb */}
         <div
           style={{
             position: 'absolute',
@@ -237,7 +342,7 @@ export default function ExploreMusicView({
             }}
           >
             <ShieldCheck size={14} color="#38ef7d" />
-            <span>Firewall-Proof • Low Data • Free Streaming</span>
+            <span>Firewall-Proof • 80M+ Songs • Smart Autoplay</span>
           </div>
 
           <h1
@@ -250,7 +355,7 @@ export default function ExploreMusicView({
               color: '#ffffff',
             }}
           >
-            All Indian Music, Unlimited &amp; Undetected
+            All Indian &amp; Global Music, Unlimited &amp; Undetected
           </h1>
 
           <p
@@ -261,7 +366,7 @@ export default function ExploreMusicView({
               marginBottom: '1.5rem',
             }}
           >
-            Stream millions of Bollywood, Punjabi, South Indian, and international tracks directly via our internal encrypted relay. Uses only ~2.5 MB per song with zero firewall detection.
+            Search any track, artist, or movie soundtrack. Smart radio autoplay keeps the music flowing seamlessly with similar vibe suggestions.
           </p>
 
           {/* AUDIO QUALITY & DATA CONSUMPTION SELECTOR */}
@@ -320,7 +425,7 @@ export default function ExploreMusicView({
                   transition: 'all 0.15s ease',
                 }}
               >
-                160 kbps (Balanced • ~3.5MB)
+                160 kbps (~3.5MB)
               </button>
 
               <button
@@ -344,8 +449,8 @@ export default function ExploreMusicView({
         </div>
       </div>
 
-      {/* SEARCH BAR & GENRE PILLS */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      {/* SEARCH BAR & AUTOCOMPLETE DROPDOWN */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }} ref={searchContainerRef}>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -377,12 +482,18 @@ export default function ExploreMusicView({
             />
             <input
               type="text"
-              placeholder="Search any Bollywood, Punjabi, Tamil, Telugu song, artist, movie or album..."
+              placeholder="Search 80M+ songs, artists, movies, albums, or lyrics..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                if (e.target.value.trim().length >= 2) setShowSuggestions(true);
+              }}
+              onFocus={() => {
+                if (searchQuery.trim().length >= 2 && suggestions) setShowSuggestions(true);
+              }}
               style={{
                 width: '100%',
-                background: 'rgba(28, 28, 30, 0.8)',
+                background: 'rgba(28, 28, 30, 0.85)',
                 backdropFilter: 'blur(20px)',
                 border: '1px solid var(--border-hairline)',
                 borderRadius: 'var(--radius-full)',
@@ -392,11 +503,11 @@ export default function ExploreMusicView({
                 outline: 'none',
                 transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
               }}
-              onFocus={(e) => {
+              onFocusCapture={(e) => {
                 e.target.style.borderColor = 'var(--apple-pink)';
                 e.target.style.boxShadow = '0 0 0 3px rgba(250, 36, 60, 0.2)';
               }}
-              onBlur={(e) => {
+              onBlurCapture={(e) => {
                 e.target.style.borderColor = 'var(--border-hairline)';
                 e.target.style.boxShadow = 'none';
               }}
@@ -406,6 +517,8 @@ export default function ExploreMusicView({
                 type="button"
                 onClick={() => {
                   setSearchQuery('');
+                  setSuggestions(null);
+                  setShowSuggestions(false);
                   loadTrending();
                 }}
                 style={{
@@ -420,6 +533,100 @@ export default function ExploreMusicView({
               >
                 ✕
               </button>
+            )}
+
+            {/* LIVE AUTOCOMPLETE DROPDOWN */}
+            {showSuggestions && suggestions && (
+              <div
+                className="apple-glass"
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 8px)',
+                  left: 0,
+                  right: 0,
+                  zIndex: 100,
+                  padding: '0.75rem',
+                  borderRadius: 'var(--radius-lg)',
+                  boxShadow: '0 20px 60px rgba(0, 0, 0, 0.85)',
+                  maxHeight: '380px',
+                  overflowY: 'auto',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  animation: 'fadeIn 0.15s ease',
+                }}
+              >
+                {/* Songs section */}
+                {suggestions.songs.length > 0 && (
+                  <div style={{ marginBottom: '0.75rem' }}>
+                    <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--apple-pink)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '0.25rem 0.5rem' }}>
+                      Songs
+                    </div>
+                    {suggestions.songs.slice(0, 5).map((s) => (
+                      <div
+                        key={s.id}
+                        onClick={() => {
+                          setSearchQuery(s.title);
+                          handleSearch(s.title);
+                        }}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.75rem',
+                          padding: '0.5rem 0.6rem',
+                          borderRadius: 'var(--radius-sm)',
+                          cursor: 'pointer',
+                          transition: 'background 0.15s ease',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <div style={{ width: '2rem', height: '2rem', borderRadius: '4px', overflow: 'hidden', background: 'rgba(255,255,255,0.08)', flexShrink: 0 }}>
+                          <img src={`/api/jiosaavn/image?url=${encodeURIComponent(s.image)}`} alt={s.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        </div>
+                        <div style={{ flex: 1, overflow: 'hidden' }}>
+                          <div style={{ fontSize: '0.85rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.subtitle}</div>
+                        </div>
+                        <Play size={14} color="var(--text-tertiary)" />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Artists section */}
+                {suggestions.artists.length > 0 && (
+                  <div style={{ marginBottom: '0.5rem' }}>
+                    <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--apple-blue)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '0.25rem 0.5rem' }}>
+                      Artists
+                    </div>
+                    {suggestions.artists.slice(0, 3).map((a) => (
+                      <div
+                        key={a.id}
+                        onClick={() => {
+                          setSearchQuery(a.title);
+                          handleSearch(a.title);
+                        }}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.75rem',
+                          padding: '0.45rem 0.6rem',
+                          borderRadius: 'var(--radius-sm)',
+                          cursor: 'pointer',
+                          transition: 'background 0.15s ease',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <div style={{ width: '1.8rem', height: '1.8rem', borderRadius: '50%', overflow: 'hidden', background: 'rgba(255,255,255,0.08)', flexShrink: 0 }}>
+                          <img src={`/api/jiosaavn/image?url=${encodeURIComponent(a.image)}`} alt={a.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        </div>
+                        <div style={{ flex: 1, fontSize: '0.85rem', fontWeight: 600 }}>{a.title}</div>
+                        <ArrowRight size={13} color="var(--text-tertiary)" />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
@@ -525,7 +732,7 @@ export default function ExploreMusicView({
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Flame size={20} color="var(--apple-pink)" />
             <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>
-              {searchQuery ? `Results for "${searchQuery}"` : selectedChip}
+              {activeQuery ? `Results for "${activeQuery}"` : selectedChip}
             </h2>
             <span style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', fontWeight: 600 }}>
               ({songs.length} songs)
@@ -594,243 +801,314 @@ export default function ExploreMusicView({
 
         {/* RESULTS GRID */}
         {!loading && !searching && songs.length > 0 && (
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-              gap: '1.25rem',
-            }}
-          >
-            {songs.map((song) => {
-              const onlineId = `saavn_${song.id}`;
-              const isSongActive = currentTrack?.id === onlineId;
-              const isSongPlaying = isSongActive && isPlaying;
-              const isSongBuffering = isSongActive && isBuffering;
+          <>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                gap: '1.25rem',
+              }}
+            >
+              {songs.map((song) => {
+                const onlineId = `saavn_${song.id}`;
+                const isSongActive = currentTrack?.id === onlineId;
+                const isSongPlaying = isSongActive && isPlaying;
+                const isSongBuffering = isSongActive && isBuffering;
+                const isFav = favoriteIds ? favoriteIds.has(onlineId) : false;
 
-              // Artwork proxy URL (firewall undetectable)
-              const proxiedArtworkUrl = `/api/jiosaavn/image?url=${encodeURIComponent(song.image)}`;
+                const proxiedArtworkUrl = `/api/jiosaavn/image?url=${encodeURIComponent(song.image)}`;
 
-              return (
-                <div
-                  key={song.id}
-                  className="apple-glass"
-                  style={{
-                    padding: '0.9rem',
-                    borderRadius: 'var(--radius-lg)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.85rem',
-                    position: 'relative',
-                    cursor: 'pointer',
-                    transition: 'transform 0.2s var(--ease-apple), box-shadow 0.2s var(--ease-apple), border-color 0.2s ease',
-                    border: isSongActive ? '1px solid var(--apple-pink)' : '1px solid var(--border-hairline)',
-                    background: isSongActive ? 'rgba(250, 36, 60, 0.08)' : 'var(--bg-card)',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-4px)';
-                    e.currentTarget.style.boxShadow = '0 12px 30px rgba(0, 0, 0, 0.6)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = 'none';
-                  }}
-                  onClick={() => playSong(song)}
-                >
-                  {/* ARTWORK CONTAINER */}
+                return (
                   <div
+                    key={song.id}
+                    className="apple-glass"
                     style={{
-                      width: '100%',
-                      aspectRatio: '1 / 1',
-                      borderRadius: 'var(--radius-md)',
-                      overflow: 'hidden',
+                      padding: '0.9rem',
+                      borderRadius: 'var(--radius-lg)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.85rem',
                       position: 'relative',
-                      background: 'rgba(255, 255, 255, 0.05)',
-                      boxShadow: '0 8px 20px rgba(0, 0, 0, 0.4)',
+                      cursor: 'pointer',
+                      transition: 'transform 0.2s var(--ease-apple), box-shadow 0.2s var(--ease-apple), border-color 0.2s ease',
+                      border: isSongActive ? '1px solid var(--apple-pink)' : '1px solid var(--border-hairline)',
+                      background: isSongActive ? 'rgba(250, 36, 60, 0.08)' : 'var(--bg-card)',
                     }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-4px)';
+                      e.currentTarget.style.boxShadow = '0 12px 30px rgba(0, 0, 0, 0.6)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                    onClick={() => playSong(song)}
                   >
-                    <img
-                      src={proxiedArtworkUrl}
-                      alt={song.title}
-                      loading="lazy"
+                    {/* ARTWORK CONTAINER */}
+                    <div
                       style={{
                         width: '100%',
-                        height: '100%',
-                        objectFit: 'cover',
-                        display: 'block',
-                        transition: 'transform 0.3s ease',
-                      }}
-                    />
-
-                    {/* PLAY OVERLAY BUTTON */}
-                    <div
-                      style={{
-                        position: 'absolute',
-                        inset: 0,
-                        background: isSongActive ? 'rgba(0, 0, 0, 0.45)' : 'rgba(0, 0, 0, 0.25)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        opacity: isSongActive ? 1 : 0.85,
-                        transition: 'opacity 0.2s ease',
+                        aspectRatio: '1 / 1',
+                        borderRadius: 'var(--radius-md)',
+                        overflow: 'hidden',
+                        position: 'relative',
+                        background: 'rgba(255, 255, 255, 0.05)',
+                        boxShadow: '0 8px 20px rgba(0, 0, 0, 0.4)',
                       }}
                     >
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          playSong(song);
-                        }}
+                      <img
+                        src={proxiedArtworkUrl}
+                        alt={song.title}
+                        loading="lazy"
                         style={{
-                          width: '3.2rem',
-                          height: '3.2rem',
-                          borderRadius: '50%',
-                          background: isSongActive ? 'var(--apple-pink)' : 'rgba(255, 255, 255, 0.95)',
-                          color: isSongActive ? '#ffffff' : '#000000',
-                          border: 'none',
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'cover',
+                          display: 'block',
+                          transition: 'transform 0.3s ease',
+                        }}
+                      />
+
+                      {/* PLAY OVERLAY BUTTON */}
+                      <div
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          background: isSongActive ? 'rgba(0, 0, 0, 0.45)' : 'rgba(0, 0, 0, 0.25)',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          cursor: 'pointer',
-                          boxShadow: '0 6px 20px rgba(0, 0, 0, 0.6)',
-                          transform: isSongActive ? 'scale(1.08)' : 'scale(1)',
-                          transition: 'transform 0.15s ease',
+                          opacity: isSongActive ? 1 : 0.85,
+                          transition: 'opacity 0.2s ease',
                         }}
                       >
-                        {isSongBuffering ? (
-                          <Loader2 size={20} className="animate-spin" />
-                        ) : isSongPlaying ? (
-                          <Pause size={20} fill="currentColor" />
-                        ) : (
-                          <Play size={20} fill="currentColor" style={{ marginLeft: '2px' }} />
-                        )}
-                      </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            playSong(song);
+                          }}
+                          style={{
+                            width: '3.2rem',
+                            height: '3.2rem',
+                            borderRadius: '50%',
+                            background: isSongActive ? 'var(--apple-pink)' : 'rgba(255, 255, 255, 0.95)',
+                            color: isSongActive ? '#ffffff' : '#000000',
+                            border: 'none',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'pointer',
+                            boxShadow: '0 6px 20px rgba(0, 0, 0, 0.6)',
+                            transform: isSongActive ? 'scale(1.08)' : 'scale(1)',
+                            transition: 'transform 0.15s ease',
+                          }}
+                        >
+                          {isSongBuffering ? (
+                            <Loader2 size={20} className="animate-spin" />
+                          ) : isSongPlaying ? (
+                            <Pause size={20} fill="currentColor" />
+                          ) : (
+                            <Play size={20} fill="currentColor" style={{ marginLeft: '2px' }} />
+                          )}
+                        </button>
+                      </div>
+
+                      {/* DURATION & DATA USAGE PILL */}
+                      <div
+                        style={{
+                          position: 'absolute',
+                          bottom: '0.5rem',
+                          left: '0.5rem',
+                          right: '0.5rem',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          fontSize: '0.6875rem',
+                          fontWeight: 700,
+                          color: '#ffffff',
+                          background: 'rgba(0, 0, 0, 0.65)',
+                          backdropFilter: 'blur(8px)',
+                          padding: '0.2rem 0.5rem',
+                          borderRadius: 'var(--radius-sm)',
+                          pointerEvents: 'none',
+                        }}
+                      >
+                        <span>{formatTime(song.duration)}</span>
+                        <span style={{ color: '#38ef7d' }}>{getEstimatedSize(song.duration, activeBitrate)}</span>
+                      </div>
                     </div>
 
-                    {/* DURATION & DATA USAGE PILL */}
+                    {/* METADATA */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', flex: 1, minHeight: '3.2rem' }}>
+                      <div
+                        style={{
+                          fontWeight: 700,
+                          fontSize: '0.925rem',
+                          lineHeight: 1.25,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 1,
+                          WebkitBoxOrient: 'vertical',
+                          color: isSongActive ? 'var(--apple-pink)' : 'var(--text-white)',
+                        }}
+                        title={song.title}
+                      >
+                        {song.title}
+                      </div>
+
+                      <div
+                        style={{
+                          fontSize: '0.78rem',
+                          color: 'var(--text-secondary)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 1,
+                          WebkitBoxOrient: 'vertical',
+                        }}
+                        title={song.artist}
+                      >
+                        {song.artist}
+                      </div>
+                    </div>
+
+                    {/* ACTION BAR: PLAY, RADIO, FAVORITE, PLAYLIST */}
                     <div
                       style={{
-                        position: 'absolute',
-                        bottom: '0.5rem',
-                        left: '0.5rem',
-                        right: '0.5rem',
                         display: 'flex',
+                        alignItems: 'center',
                         justifyContent: 'space-between',
-                        alignItems: 'center',
-                        fontSize: '0.6875rem',
-                        fontWeight: 700,
-                        color: '#ffffff',
-                        background: 'rgba(0, 0, 0, 0.65)',
-                        backdropFilter: 'blur(8px)',
-                        padding: '0.2rem 0.5rem',
-                        borderRadius: 'var(--radius-sm)',
-                        pointerEvents: 'none',
+                        paddingTop: '0.5rem',
+                        borderTop: '1px solid rgba(255, 255, 255, 0.06)',
                       }}
                     >
-                      <span>{formatTime(song.duration)}</span>
-                      <span style={{ color: '#38ef7d' }}>{getEstimatedSize(song.duration, activeBitrate)}</span>
+                      {/* Radio / Autoplay Similar */}
+                      {onStartRadio ? (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const trk = mapToWorkspaceTrack(song);
+                            onStartRadio(trk);
+                          }}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-secondary)',
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.25rem',
+                            padding: '0.2rem 0',
+                          }}
+                          title="Start Radio with similar songs"
+                        >
+                          <Radio size={13} color="var(--apple-pink)" />
+                          <span>Radio</span>
+                        </button>
+                      ) : (
+                        <div style={{ fontSize: '0.75rem', color: isSongActive ? 'var(--apple-pink)' : 'var(--text-tertiary)', fontWeight: 600 }}>
+                          {isSongPlaying ? 'Playing' : 'Ready'}
+                        </div>
+                      )}
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        {/* Favorite button */}
+                        {onToggleFavorite && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const trk = mapToWorkspaceTrack(song);
+                              onToggleFavorite(trk);
+                            }}
+                            style={{
+                              background: isFav ? 'rgba(250, 36, 60, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                              border: 'none',
+                              borderRadius: 'var(--radius-full)',
+                              width: '1.75rem',
+                              height: '1.75rem',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: isFav ? 'var(--apple-pink)' : 'var(--text-secondary)',
+                              cursor: 'pointer',
+                              transition: 'all 0.15s ease',
+                            }}
+                            title={isFav ? 'Remove from favorites' : 'Add to favorites'}
+                          >
+                            <Heart size={13} fill={isFav ? 'var(--apple-pink)' : 'none'} />
+                          </button>
+                        )}
+
+                        {/* Add to Playlist button */}
+                        {onAddToPlaylist && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const trk = mapToWorkspaceTrack(song);
+                              onAddToPlaylist(trk);
+                              setAddedIds((prev) => ({ ...prev, [song.id]: true }));
+                              setTimeout(() => {
+                                setAddedIds((prev) => ({ ...prev, [song.id]: false }));
+                              }, 2500);
+                            }}
+                            style={{
+                              background: 'rgba(255, 255, 255, 0.08)',
+                              border: 'none',
+                              borderRadius: 'var(--radius-full)',
+                              width: '1.75rem',
+                              height: '1.75rem',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: addedIds[song.id] ? '#30d158' : 'var(--text-white)',
+                              cursor: 'pointer',
+                              transition: 'background 0.15s ease',
+                            }}
+                            title="Add to Playlist"
+                          >
+                            {addedIds[song.id] ? <Check size={13} /> : <Plus size={13} />}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
+                );
+              })}
+            </div>
 
-                  {/* METADATA */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', flex: 1, minHeight: '3.2rem' }}>
-                    <div
-                      style={{
-                        fontWeight: 700,
-                        fontSize: '0.925rem',
-                        lineHeight: 1.25,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 1,
-                        WebkitBoxOrient: 'vertical',
-                        color: isSongActive ? 'var(--apple-pink)' : 'var(--text-white)',
-                      }}
-                      title={song.title}
-                    >
-                      {song.title}
-                    </div>
-
-                    <div
-                      style={{
-                        fontSize: '0.78rem',
-                        color: 'var(--text-secondary)',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 1,
-                        WebkitBoxOrient: 'vertical',
-                      }}
-                      title={song.artist}
-                    >
-                      {song.artist}
-                    </div>
-                  </div>
-
-                  {/* ACTION BAR: PLAY & PLAYLIST */}
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      paddingTop: '0.5rem',
-                      borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-                    }}
-                  >
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        playSong(song);
-                      }}
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        color: isSongActive ? 'var(--apple-pink)' : 'var(--text-secondary)',
-                        fontSize: '0.75rem',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.3rem',
-                        padding: '0.2rem 0',
-                      }}
-                    >
-                      <Sparkles size={13} />
-                      <span>{isSongPlaying ? 'Now Playing' : 'Play'}</span>
-                    </button>
-
-                    {onAddToPlaylist && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const trk = mapToWorkspaceTrack(song);
-                          onAddToPlaylist(trk);
-                          setAddedIds((prev) => ({ ...prev, [song.id]: true }));
-                          setTimeout(() => {
-                            setAddedIds((prev) => ({ ...prev, [song.id]: false }));
-                          }, 2500);
-                        }}
-                        style={{
-                          background: 'rgba(255, 255, 255, 0.08)',
-                          border: 'none',
-                          borderRadius: 'var(--radius-full)',
-                          width: '1.75rem',
-                          height: '1.75rem',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          color: addedIds[song.id] ? '#30d158' : 'var(--text-white)',
-                          cursor: 'pointer',
-                          transition: 'background 0.15s ease',
-                        }}
-                        title="Add to Playlist"
-                      >
-                        {addedIds[song.id] ? <Check size={13} /> : <Plus size={13} />}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+            {/* INFINITE PAGINATION: LOAD MORE BUTTON */}
+            {hasMore && activeQuery && (
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '2rem', marginBottom: '1.5rem' }}>
+                <button
+                  onClick={handleLoadMore}
+                  disabled={loadingMore}
+                  className="btn-apple-secondary"
+                  style={{
+                    padding: '0.8rem 2rem',
+                    borderRadius: 'var(--radius-full)',
+                    fontSize: '0.875rem',
+                    fontWeight: 600,
+                    gap: '0.5rem',
+                  }}
+                >
+                  {loadingMore ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      <span>Loading more songs...</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown size={16} />
+                      <span>Load More Results</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
