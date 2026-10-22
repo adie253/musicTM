@@ -62,6 +62,7 @@ export default function VideoSongsView() {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeVideo, setActiveVideo] = useState<VideoResult | null>(null);
+  const [iframeError, setIframeError] = useState(false);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [noApiKey, setNoApiKey] = useState(false);
@@ -91,6 +92,8 @@ export default function VideoSongsView() {
     setLoading(true);
     setError(null);
     setNextPageToken(null);
+    setActiveVideo(null);
+    setIframeError(false);
     try {
       const data = await fetchVideos(chip.query);
       setVideos(data.results || []);
@@ -268,26 +271,78 @@ export default function VideoSongsView() {
           border: '1px solid rgba(255,255,255,0.1)',
           background: '#000', boxShadow: '0 8px 40px rgba(0,0,0,0.6)',
         }}>
-          <div style={{ position: 'relative', paddingBottom: '56.25%', height: 0 }}>
-            <iframe
-              src={`https://www.youtube-nocookie.com/embed/${activeVideo.id}?autoplay=1&rel=0&modestbranding=1`}
-              style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' }}
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-              allowFullScreen
-              title={activeVideo.title}
-            />
-          </div>
+          {iframeError ? (
+            /* Fallback when embed is blocked */
+            <div style={{
+              position: 'relative', paddingBottom: '56.25%', background: '#0d0d0d',
+              overflow: 'hidden',
+            }}>
+              {activeVideo.thumbnail && (
+                <img
+                  src={activeVideo.thumbnail}
+                  alt={activeVideo.title}
+                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: 0.35, filter: 'blur(4px)' }}
+                />
+              )}
+              <div style={{
+                position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center', gap: '1rem', padding: '2rem',
+              }}>
+                <div style={{ fontSize: '2.5rem' }}>🚫</div>
+                <div style={{ color: '#fff', fontWeight: 700, fontSize: '1rem', textAlign: 'center' }}>Embedding disabled for this video</div>
+                <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '0.82rem', textAlign: 'center', maxWidth: 320 }}>
+                  The uploader has restricted embedding. Watch it directly on YouTube.
+                </div>
+                <a
+                  href={`https://www.youtube.com/watch?v=${activeVideo.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                    padding: '0.65rem 1.5rem', borderRadius: '999px',
+                    background: '#ff0000', color: '#fff',
+                    fontWeight: 700, fontSize: '0.875rem', textDecoration: 'none',
+                    boxShadow: '0 4px 16px rgba(255,0,0,0.4)',
+                  }}
+                >
+                  <ExternalLink size={15} /> Watch on YouTube
+                </a>
+              </div>
+            </div>
+          ) : (
+            <div style={{ position: 'relative', paddingBottom: '56.25%', height: 0 }}>
+              <iframe
+                key={activeVideo.id}
+                src={`https://www.youtube-nocookie.com/embed/${activeVideo.id}?autoplay=1&rel=0&modestbranding=1`}
+                style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' }}
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+                title={activeVideo.title}
+                onError={() => setIframeError(true)}
+              />
+            </div>
+          )}
           <div style={{ padding: '1rem 1.25rem', background: 'rgba(255,255,255,0.03)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activeVideo.title}</div>
               <div style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.5)', marginTop: '0.2rem' }}>{activeVideo.channelTitle}</div>
             </div>
-            <button
-              onClick={() => setActiveVideo(null)}
-              style={{ flexShrink: 0, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', padding: '0.4rem 0.8rem', color: 'rgba(255,255,255,0.7)', fontSize: '0.78rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-            >
-              <X size={13} /> Close
-            </button>
+            <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
+              <a
+                href={`https://www.youtube.com/watch?v=${activeVideo.id}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', padding: '0.4rem 0.8rem', color: 'rgba(255,255,255,0.7)', fontSize: '0.78rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem', textDecoration: 'none' }}
+              >
+                <ExternalLink size={13} /> YouTube
+              </a>
+              <button
+                onClick={() => { setActiveVideo(null); setIframeError(false); }}
+                style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', padding: '0.4rem 0.8rem', color: 'rgba(255,255,255,0.7)', fontSize: '0.78rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+              >
+                <X size={13} /> Close
+              </button>
+            </div>
           </div>
         </div>
       )}

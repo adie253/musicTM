@@ -8,7 +8,9 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const query = searchParams.get('q') || '';
   const pageToken = searchParams.get('pageToken') || '';
-  const maxResults = Math.min(parseInt(searchParams.get('maxResults') || '20', 10), 50);
+  // Request extra so after filtering non-embeddable we still have enough
+  const wantedResults = Math.min(parseInt(searchParams.get('maxResults') || '20', 10), 50);
+  const fetchResults = Math.min(wantedResults * 2, 50);
 
   const apiKey = process.env.YOUTUBE_API_KEY;
   if (!apiKey || apiKey === 'YOUR_YOUTUBE_API_KEY_HERE') {
@@ -19,21 +21,24 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    // Build search URL
+    // videoEmbeddable=true → API only returns videos that allow embedding
+    // videoSyndicated=true → only videos playable outside YouTube.com
     const url = new URL(`${YT_API_BASE}/search`);
     url.searchParams.set('part', 'snippet');
     url.searchParams.set('type', 'video');
     url.searchParams.set('videoCategoryId', '10'); // Music category
+    url.searchParams.set('videoEmbeddable', 'true');
+    url.searchParams.set('videoSyndicated', 'true');
     url.searchParams.set('q', query || 'Bollywood Video Songs 2024');
-    url.searchParams.set('maxResults', String(maxResults));
+    url.searchParams.set('maxResults', String(fetchResults));
     url.searchParams.set('key', apiKey);
     url.searchParams.set('regionCode', 'IN');
     url.searchParams.set('relevanceLanguage', 'hi');
     if (pageToken) url.searchParams.set('pageToken', pageToken);
 
     const searchRes = await fetch(url.toString(), {
-      headers: { 'Accept': 'application/json' },
-      next: { revalidate: 300 }, // Cache 5 min
+      headers: { Accept: 'application/json' },
+      next: { revalidate: 300 },
     });
 
     if (!searchRes.ok) {
@@ -46,15 +51,17 @@ export async function GET(req: NextRequest) {
     }
 
     const data = await searchRes.json();
-    const items = data.items || [];
+    const items: any[] = data.items || [];
 
-    // Get video IDs to fetch duration via videos endpoint
     const ids = items.map((it: any) => it.id?.videoId).filter(Boolean);
 
-    let durationMap: Record<string, string> = {};
+    // Fetch contentDetails (duration) + status (embeddable) in one call
+    const durationMap: Record<string, string> = {};
+    const embeddableSet = new Set<string>();
+
     if (ids.length > 0) {
       const vUrl = new URL(`${YT_API_BASE}/videos`);
-      vUrl.searchParams.set('part', 'contentDetails');
+      vUrl.searchParams.set('part', 'contentDetails,status');
       vUrl.searchParams.set('id', ids.join(','));
       vUrl.searchParams.set('key', apiKey);
       const vRes = await fetch(vUrl.toString(), { headers: { Accept: 'application/json' } });
@@ -62,12 +69,19 @@ export async function GET(req: NextRequest) {
         const vData = await vRes.json();
         for (const v of vData.items || []) {
           durationMap[v.id] = v.contentDetails?.duration || '';
+          // Keep only if status says embeddable (absent means true by default)
+          if (v.status?.embeddable !== false) {
+            embeddableSet.add(v.id);
+          }
         }
       }
     }
 
     const results = items
       .filter((it: any) => it.id?.videoId)
+      // Secondary filter: drop any the status API flagged as non-embeddable
+      .filter((it: any) => embeddableSet.size === 0 || embeddableSet.has(it.id.videoId))
+      .slice(0, wantedResults)
       .map((it: any) => {
         const vid = it.id.videoId;
         const sn = it.snippet || {};
