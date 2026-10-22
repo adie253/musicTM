@@ -44,8 +44,12 @@ import {
   FileAudio,
   Radio,
   Infinity,
+  Film,
+  Clapperboard,
 } from 'lucide-react';
 import ExploreMusicView from './ExploreMusicView';
+import VideoSongsView from './VideoSongsView';
+import MoviesView from './MoviesView';
 
 interface CommunityUser {
   id: string;
@@ -117,7 +121,7 @@ function getTrackGradient(id: string) {
 export default function WorkspacePage() {
   const router = useRouter();
   const [user, setUser] = useState<{ id: string; username: string; email: string; displayName?: string } | null>(null);
-  const [activeTab, setActiveTab] = useState<'listen' | 'explore' | 'tracks' | 'playlists' | 'favorites' | 'upload' | 'profile'>('listen');
+  const [activeTab, setActiveTab] = useState<'listen' | 'explore' | 'videos' | 'movies' | 'tracks' | 'playlists' | 'favorites' | 'upload' | 'profile'>('listen');
 
   // Data states
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -1143,6 +1147,48 @@ export default function WorkspacePage() {
             </button>
 
             <button
+              onClick={() => setActiveTab('videos')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                padding: '0.6rem 0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                background: activeTab === 'videos' ? 'rgba(250, 36, 60, 0.15)' : 'transparent',
+                color: activeTab === 'videos' ? 'var(--apple-pink)' : 'var(--text-white)',
+                border: 'none',
+                fontWeight: activeTab === 'videos' ? 600 : 500,
+                fontSize: '0.875rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              <Film size={18} />
+              <span>Video Songs</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('movies')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                padding: '0.6rem 0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                background: activeTab === 'movies' ? 'rgba(250, 36, 60, 0.15)' : 'transparent',
+                color: activeTab === 'movies' ? 'var(--apple-pink)' : 'var(--text-white)',
+                border: 'none',
+                fontWeight: activeTab === 'movies' ? 600 : 500,
+                fontSize: '0.875rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              <Clapperboard size={18} />
+              <span>Movies & Trailers</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('tracks')}
               style={{
                 display: 'flex',
@@ -1749,6 +1795,16 @@ export default function WorkspacePage() {
                   onToggleFavorite={toggleFavorite}
                   onStartRadio={handleStartRadio}
                 />
+              )}
+
+              {/* TAB: VIDEO SONGS */}
+              {activeTab === 'videos' && (
+                <VideoSongsView />
+              )}
+
+              {/* TAB: MOVIES & TRAILERS */}
+              {activeTab === 'movies' && (
+                <MoviesView />
               )}
 
               {/* TAB: FAVORITES / LIKED SONGS */}
