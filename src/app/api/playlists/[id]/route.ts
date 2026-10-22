@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { getSession } from '@/lib/auth';
 import { db, ensureDbInitialized } from '@/lib/db';
 import { playlists, playlistTracks, tracks, users } from '@/lib/db/schema';
-import { eq, and, asc } from 'drizzle-orm';
+import { eq, and, asc, or } from 'drizzle-orm';
 
 export async function GET(
   req: NextRequest,
@@ -41,7 +41,8 @@ export async function GET(
     const playlist = found[0];
 
     // Check visibility
-    if (playlist.visibility === 'private' && playlist.userId !== session.userId) {
+    const canViewPrivateTracks = playlist.userId === session.userId || session.role === 'admin';
+    if (playlist.visibility === 'private' && !canViewPrivateTracks) {
       return NextResponse.json({ error: 'Access denied to private playlist' }, { status: 403 });
     }
 
@@ -49,6 +50,8 @@ export async function GET(
     const playlistTrackRows = await db
       .select({
         id: tracks.id,
+        userId: tracks.userId,
+        visibility: tracks.visibility,
         title: tracks.title,
         artist: tracks.artist,
         album: tracks.album,
@@ -59,7 +62,12 @@ export async function GET(
       })
       .from(playlistTracks)
       .innerJoin(tracks, eq(playlistTracks.trackId, tracks.id))
-      .where(eq(playlistTracks.playlistId, id))
+      .where(and(
+        eq(playlistTracks.playlistId, id),
+        canViewPrivateTracks
+          ? undefined
+          : or(eq(tracks.visibility, 'public'), eq(tracks.userId, session.userId))
+      ))
       .orderBy(asc(playlistTracks.orderIndex));
 
     return NextResponse.json({
@@ -67,7 +75,7 @@ export async function GET(
         ...playlist,
         isOwner: playlist.userId === session.userId,
       },
-      tracks: playlistTrackRows,
+      tracks: playlistTrackRows.map(({ userId: _userId, visibility: _visibility, ...track }) => track),
     });
   } catch (error) {
     console.error('Fetch playlist detail error:', error);

@@ -2,8 +2,12 @@ import bcrypt from 'bcryptjs';
 import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
 
+const configuredJwtSecret = process.env.JWT_SECRET;
+if (process.env.NODE_ENV === 'production' && !configuredJwtSecret) {
+  throw new Error('JWT_SECRET must be configured in production.');
+}
 const JWT_SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET || 'music_vault_super_secure_stealth_secret_2026_dev_key'
+  configuredJwtSecret || 'local-development-only-secret-do-not-use-in-production'
 );
 
 export const COOKIE_NAME = 'vault_session';

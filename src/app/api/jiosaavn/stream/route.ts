@@ -3,6 +3,18 @@ import { decryptMediaUrl, AudioQuality } from '@/lib/jiosaavn';
 
 export const dynamic = 'force-dynamic';
 
+function isAllowedMediaUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      (url.hostname === 'saavncdn.com' || url.hostname.endsWith('.saavncdn.com'))
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -20,6 +32,10 @@ export async function GET(req: NextRequest) {
       return new NextResponse('Media stream URL or encrypted token missing', {
         status: 400,
       });
+    }
+
+    if (!isAllowedMediaUrl(mediaUrl)) {
+      return new NextResponse('Only HTTPS JioSaavn media URLs are allowed', { status: 400 });
     }
 
     // Ensure bitrate is set correctly if requested
@@ -44,6 +60,7 @@ export async function GET(req: NextRequest) {
 
     const upstreamResponse = await fetch(mediaUrl, {
       headers: upstreamHeaders,
+      redirect: 'manual',
     });
 
     if (!upstreamResponse.ok && upstreamResponse.status !== 206) {
@@ -54,6 +71,7 @@ export async function GET(req: NextRequest) {
           .replace('_320.mp4', '_96.mp4');
         const fallbackRes = await fetch(fallbackUrl, {
           headers: upstreamHeaders,
+          redirect: 'manual',
         });
 
         if (fallbackRes.ok || fallbackRes.status === 206) {

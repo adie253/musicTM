@@ -3,8 +3,35 @@ import fs from 'fs';
 import { getSession } from '@/lib/auth';
 import { db, client, ensureDbInitialized } from '@/lib/db';
 import { tracks, playlists, playlistTracks } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { Readable } from 'stream';
+
+function parseByteRange(rangeHeader: string, fileSize: number): { start: number; end: number } | null {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+  if (!match || fileSize <= 0 || (!match[1] && !match[2])) return null;
+
+  let start: number;
+  let end: number;
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return null;
+    start = Math.max(fileSize - suffixLength, 0);
+    end = fileSize - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] ? Number(match[2]) : fileSize - 1;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start >= fileSize || end < start) return null;
+    end = Math.min(end, fileSize - 1);
+  }
+  return { start, end };
+}
+
+function invalidRange(fileSize: number) {
+  return new NextResponse('Requested range not satisfiable', {
+    status: 416,
+    headers: { 'Content-Range': `bytes */${fileSize}` },
+  });
+}
 
 export async function GET(
   req: NextRequest,
@@ -47,7 +74,7 @@ export async function GET(
         .select({ playlistId: playlistTracks.playlistId })
         .from(playlistTracks)
         .innerJoin(playlists, eq(playlistTracks.playlistId, playlists.id))
-        .where(eq(playlistTracks.trackId, id))
+        .where(and(eq(playlistTracks.trackId, id), eq(playlists.visibility, 'public')))
         .limit(1);
 
       if (publicRefs.length > 0) {
@@ -62,21 +89,13 @@ export async function GET(
     const range = req.headers.get('range');
     const fileSize = track.fileSize;
     const mimeType = track.mimeType || 'audio/mpeg';
+    const byteRange = range ? parseByteRange(range, fileSize) : null;
+    if (range && !byteRange) return invalidRange(fileSize);
 
     // 1. STREAM FROM LOCAL DISK (if file exists)
     if (fs.existsSync(track.filePath)) {
       if (range) {
-        const parts = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-
-        if (start >= fileSize || end >= fileSize) {
-          return new NextResponse('Requested range not satisfiable', {
-            status: 416,
-            headers: { 'Content-Range': `bytes */${fileSize}` },
-          });
-        }
-
+        const { start, end } = byteRange!;
         const chunkSize = end - start + 1;
         const nodeStream = fs.createReadStream(track.filePath, { start, end });
         const webStream = Readable.toWeb(nodeStream) as ReadableStream;
@@ -109,17 +128,7 @@ export async function GET(
     // 2. STREAM FROM TURSO CLOUD DATABASE (BLOB substr streaming)
     // Check if audio_data is stored in Turso
     if (range) {
-      const parts = range.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-
-      if (start >= fileSize || end >= fileSize) {
-        return new NextResponse('Requested range not satisfiable', {
-          status: 416,
-          headers: { 'Content-Range': `bytes */${fileSize}` },
-        });
-      }
-
+      const { start, end } = byteRange!;
       const chunkSize = end - start + 1;
       // SQLite substr is 1-indexed: substr(data, start + 1, chunkSize)
       const res = await client.execute({
