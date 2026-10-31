@@ -19,6 +19,11 @@ import {
   Guitar,
   Headphones,
   AlertCircle,
+  Youtube,
+  Tv2,
+  Laugh,
+  Trophy,
+  Globe,
 } from 'lucide-react';
 
 interface VideoResult {
@@ -31,15 +36,18 @@ interface VideoResult {
 }
 
 const PRESET_CHIPS = [
-  { label: '🔥 Trending Music Videos', query: 'Bollywood Video Songs 2024 Official' },
-  { label: 'Arijit Singh', query: 'Arijit Singh Official Video Songs' },
-  { label: 'Diljit Dosanjh', query: 'Diljit Dosanjh Punjabi Video Songs Official' },
-  { label: 'Ap Dhillon', query: 'AP Dhillon Official Music Video' },
-  { label: 'Shreya Ghoshal', query: 'Shreya Ghoshal Hindi Songs Official Video' },
-  { label: 'A.R. Rahman', query: 'AR Rahman Best Video Songs HD' },
-  { label: 'English Pop Hits', query: 'English Pop Music Video 2024 Official' },
-  { label: 'Anirudh', query: 'Anirudh Ravichander Tamil Songs Video' },
-  { label: 'Atif Aslam', query: 'Atif Aslam Official Video Songs' },
+  { label: '🔥 Trending', query: 'Trending Videos 2024' },
+  { label: '🎵 Music Videos', query: 'Official Music Video 2024' },
+  { label: '🎬 Bollywood', query: 'Bollywood Songs 2024 Official Video' },
+  { label: '🎤 Arijit Singh', query: 'Arijit Singh Official Video Songs' },
+  { label: '🎸 English Pop', query: 'English Pop Music Video 2024' },
+  { label: '😂 Comedy', query: 'Funny Videos 2024' },
+  { label: '🏏 Sports', query: 'Sports Highlights 2024' },
+  { label: '🎮 Gaming', query: 'Gaming Videos 2024' },
+  { label: '🌍 Vlogs', query: 'Travel Vlog 2024' },
+  { label: '📚 Education', query: 'Educational Videos 2024' },
+  { label: '🎵 Diljit Dosanjh', query: 'Diljit Dosanjh Punjabi Video Songs Official' },
+  { label: '🎵 AP Dhillon', query: 'AP Dhillon Official Music Video' },
 ];
 
 /** Parse ISO 8601 duration to mm:ss */
@@ -171,13 +179,13 @@ export default function VideoSongsView() {
             fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase',
             letterSpacing: '0.06em', marginBottom: '0.75rem',
           }}>
-            <Film size={12} /> Video Songs
+            <Film size={12} /> YouTube
           </div>
           <h1 style={{ fontSize: 'clamp(1.6rem, 3vw, 2.2rem)', fontWeight: 800, color: '#fff', marginBottom: '0.4rem' }}>
-            🎬 Video Songs
+            📺 YouTube
           </h1>
           <p style={{ color: 'rgba(255,255,255,0.65)', fontSize: '0.9rem', marginBottom: '1.5rem', maxWidth: 480 }}>
-            Stream official music videos — securely routed through our server, firewall-transparent.
+            Stream any video from YouTube — music, sports, vlogs, comedy &amp; more. Securely embedded.
           </p>
 
           {/* Search bar */}
@@ -188,7 +196,7 @@ export default function VideoSongsView() {
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Search artists, songs, albums…"
+              placeholder="Search videos, channels, topics…"
               style={{
                 width: '100%', padding: '0.85rem 3rem 0.85rem 2.75rem',
                 borderRadius: '999px', border: '1px solid rgba(255,255,255,0.18)',
@@ -310,18 +318,18 @@ export default function VideoSongsView() {
               </div>
             </div>
           ) : (
-            <div style={{ position: 'relative', paddingBottom: '56.25%', height: 0 }}>
-              <iframe
-                key={activeVideo.id}
-                src={`https://www.youtube-nocookie.com/embed/${activeVideo.id}?autoplay=1&rel=0&modestbranding=1`}
-                style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' }}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                referrerPolicy="strict-origin-when-cross-origin"
-                allowFullScreen
-                title={activeVideo.title}
-                onError={() => setIframeError(true)}
-              />
-            </div>
+              <div style={{ position: 'relative', paddingBottom: '56.25%', height: 0 }}>
+                <iframe
+                  key={activeVideo.id}
+                  src={`https://www.youtube-nocookie.com/embed/${activeVideo.id}?autoplay=1&rel=0&modestbranding=1`}
+                  style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' }}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  referrerPolicy="strict-origin-when-cross-origin"
+                  allowFullScreen
+                  title={activeVideo.title}
+                  onError={() => setIframeError(true)}
+                />
+              </div>
           )}
           <div style={{ padding: '1rem 1.25rem', background: 'rgba(255,255,255,0.03)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
             <div style={{ minWidth: 0 }}>
