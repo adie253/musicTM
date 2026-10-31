@@ -23,17 +23,15 @@ export async function GET(req: NextRequest) {
   try {
     // videoEmbeddable=true → API only returns videos that allow embedding
     // videoSyndicated=true → only videos playable outside YouTube.com
+    // No videoCategoryId filter — show ALL YouTube content, not just music
     const url = new URL(`${YT_API_BASE}/search`);
     url.searchParams.set('part', 'snippet');
     url.searchParams.set('type', 'video');
-    url.searchParams.set('videoCategoryId', '10'); // Music category
     url.searchParams.set('videoEmbeddable', 'true');
     url.searchParams.set('videoSyndicated', 'true');
-    url.searchParams.set('q', query || 'Bollywood Video Songs 2024');
+    url.searchParams.set('q', query || 'Trending Videos 2024');
     url.searchParams.set('maxResults', String(fetchResults));
     url.searchParams.set('key', apiKey);
-    url.searchParams.set('regionCode', 'IN');
-    url.searchParams.set('relevanceLanguage', 'hi');
     if (pageToken) url.searchParams.set('pageToken', pageToken);
 
     const searchRes = await fetch(url.toString(), {
