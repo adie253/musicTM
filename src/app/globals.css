@@ -291,12 +291,32 @@ input[type="range"]:hover::-webkit-slider-thumb {
   .desktop-only {
     display: none !important;
   }
+  .workspace-main {
+    padding: 1rem 0.9rem !important;
+  }
+  .explore-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 0.75rem !important;
+  }
+  .video-grid {
+    grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+    gap: 0.85rem !important;
+  }
 }
 
 @media (min-width: 769px) {
   .mobile-only {
     display: none !important;
   }
+}
+
+.mobile-nav-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+}
+.mobile-nav-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 /* Spin animation for loaders */

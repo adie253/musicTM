@@ -851,6 +851,7 @@ export default function ExploreMusicView({
         {!loading && !searching && songs.length > 0 && (
           <>
             <div
+              className="explore-grid"
               style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',

@@ -1713,14 +1713,17 @@ export default function WorkspacePage() {
         )}
 
         {/* MAIN CONTENT CONTAINER */}
-        <main style={{
-          flex: 1,
-          padding: '1.75rem 1.5rem',
-          paddingBottom: currentTrack ? '140px' : '90px',
-          maxWidth: '1200px',
-          margin: '0 auto',
-          width: '100%',
-        }}>
+        <main
+          className="workspace-main"
+          style={{
+            flex: 1,
+            padding: '1.75rem 1.5rem',
+            paddingBottom: currentTrack ? '145px' : '90px',
+            maxWidth: '1200px',
+            margin: '0 auto',
+            width: '100%',
+          }}
+        >
           {searchQuery.trim().length > 0 || selectedUserFilter ? (
             <div>
               {/* Search Header */}
@@ -4489,7 +4492,7 @@ export default function WorkspacePage() {
   {/* MACOS APPLE MUSIC FULLSCREEN PLAYER — LYRICS ENABLED */}
   {isExpandedPlayer && currentTrack && (
     <div
-      className="fullscreen-player-root"
+      className={`fullscreen-player-root ${showLyrics ? 'has-lyrics' : ''}`}
       style={{
         position: 'fixed',
         inset: 0,
@@ -4508,9 +4511,10 @@ export default function WorkspacePage() {
     >
       <style>{`
         @media (max-width: 768px) {
-          .fullscreen-player-root { flex-direction: column !important; overflow-y: auto !important; }
-          .fullscreen-player-half { width: 100% !important; flex: none !important; min-height: auto !important; }
-          .fullscreen-lyrics-half { width: 100% !important; flex: 1 1 auto !important; border-left: none !important; border-top: 1px solid rgba(255,255,255,0.08) !important; min-height: 50vh !important; }
+          .fullscreen-player-root { flex-direction: column !important; overflow: hidden !important; }
+          .fullscreen-player-half { width: 100% !important; height: 100dvh !important; flex: 1 1 100% !important; padding: 3.5rem 1.25rem 1.5rem !important; }
+          .fullscreen-player-root.has-lyrics .fullscreen-player-half { display: none !important; }
+          .fullscreen-lyrics-half { width: 100% !important; height: 100dvh !important; min-height: 100dvh !important; flex: 1 1 100% !important; border-left: none !important; border-top: none !important; padding: 3.75rem 1.25rem 1.5rem !important; }
         }
       `}</style>
       {/* ATMOSPHERIC GAUSSIAN BLURRED BACKDROP */}
@@ -5102,7 +5106,7 @@ export default function WorkspacePage() {
   )}
 
       {/* MOBILE BOTTOM TAB BAR */}
-      <nav className="mobile-only" style={{
+      <nav className="mobile-only mobile-nav-scroll" style={{
         position: 'fixed',
         bottom: 0,
         left: 0,
@@ -5114,122 +5118,50 @@ export default function WorkspacePage() {
         borderTop: '1px solid var(--border-hairline)',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'space-around',
+        justifyContent: 'flex-start',
+        overflowX: 'auto',
+        gap: '0.25rem',
+        padding: '0 0.5rem',
         zIndex: 35,
       }}>
-        <button
-          onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('listen'); }}
-          style={{
-            background: 'none',
-            border: 'none',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '0.2rem',
-            color: activeTab === 'listen' ? 'var(--apple-pink)' : 'var(--text-tertiary)',
-            cursor: 'pointer',
-            fontSize: '0.65rem',
-            fontWeight: 600,
-          }}
-        >
-          <Compass size={20} />
-          <span>Listen Now</span>
-        </button>
-
-        <button
-          onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('explore'); }}
-          style={{
-            background: 'none',
-            border: 'none',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '0.2rem',
-            color: activeTab === 'explore' ? 'var(--apple-pink)' : 'var(--text-tertiary)',
-            cursor: 'pointer',
-            fontSize: '0.65rem',
-            fontWeight: 600,
-          }}
-        >
-          <Radio size={20} />
-          <span>Explore</span>
-        </button>
-
-        <button
-          onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('tracks'); }}
-          style={{
-            background: 'none',
-            border: 'none',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '0.2rem',
-            color: activeTab === 'tracks' ? 'var(--apple-pink)' : 'var(--text-tertiary)',
-            cursor: 'pointer',
-            fontSize: '0.65rem',
-            fontWeight: 600,
-          }}
-        >
-          <Music size={20} />
-          <span>Songs</span>
-        </button>
-
-        <button
-          onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('playlists'); }}
-          style={{
-            background: 'none',
-            border: 'none',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '0.2rem',
-            color: activeTab === 'playlists' ? 'var(--apple-pink)' : 'var(--text-tertiary)',
-            cursor: 'pointer',
-            fontSize: '0.65rem',
-            fontWeight: 600,
-          }}
-        >
-          <ListMusic size={20} />
-          <span>Playlists</span>
-        </button>
-
-        <button
-          onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('upload'); }}
-          style={{
-            background: 'none',
-            border: 'none',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '0.2rem',
-            color: activeTab === 'upload' ? 'var(--apple-pink)' : 'var(--text-tertiary)',
-            cursor: 'pointer',
-            fontSize: '0.65rem',
-            fontWeight: 600,
-          }}
-        >
-          <Upload size={20} />
-          <span>Add Music</span>
-        </button>
-
-        <button
-          onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('profile'); }}
-          style={{
-            background: 'none',
-            border: 'none',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '0.2rem',
-            color: activeTab === 'profile' ? 'var(--apple-pink)' : 'var(--text-tertiary)',
-            cursor: 'pointer',
-            fontSize: '0.65rem',
-            fontWeight: 600,
-          }}
-        >
-          <User size={20} />
-          <span>Profile</span>
-        </button>
+        {[
+          { id: 'listen' as const, label: 'Listen', icon: Compass },
+          { id: 'explore' as const, label: 'Explore', icon: Radio },
+          { id: 'videos' as const, label: 'YouTube', icon: Film },
+          { id: 'movies' as const, label: 'Movies', icon: Clapperboard },
+          { id: 'tracks' as const, label: 'Songs', icon: Music },
+          { id: 'playlists' as const, label: 'Playlists', icon: ListMusic },
+          { id: 'favorites' as const, label: 'Favorites', icon: Heart },
+          { id: 'upload' as const, label: 'Upload', icon: Upload },
+          { id: 'profile' as const, label: 'Profile', icon: User },
+        ].map((item) => {
+          const Icon = item.icon;
+          const isTabActive = activeTab === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab(item.id); }}
+              style={{
+                background: 'none',
+                border: 'none',
+                flex: '0 0 auto',
+                minWidth: '64px',
+                padding: '0.35rem 0.4rem',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '0.2rem',
+                color: isTabActive ? 'var(--apple-pink)' : 'var(--text-tertiary)',
+                cursor: 'pointer',
+                fontSize: '0.65rem',
+                fontWeight: 600,
+              }}
+            >
+              <Icon size={20} />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
       </nav>
 
       {/* CREATE PLAYLIST MODAL */}
