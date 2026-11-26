@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { getSession } from '@/lib/auth';
 import { db, ensureDbInitialized } from '@/lib/db';
 import { playlists, playlistTracks, tracks, users } from '@/lib/db/schema';
-import { eq, and, asc, or } from 'drizzle-orm';
+import { eq, and, asc } from 'drizzle-orm';
 
 export async function GET(
   req: NextRequest,
@@ -46,10 +46,14 @@ export async function GET(
       return NextResponse.json({ error: 'Access denied to private playlist' }, { status: 403 });
     }
 
-    // Fetch ordered tracks
+    // Fetch ordered tracks (supports both local vault tracks and online tracks stored in trackData)
     const playlistTrackRows = await db
       .select({
-        id: tracks.id,
+        ptTrackId: playlistTracks.trackId,
+        trackData: playlistTracks.trackData,
+        orderIndex: playlistTracks.orderIndex,
+        addedAt: playlistTracks.addedAt,
+        vaultId: tracks.id,
         userId: tracks.userId,
         visibility: tracks.visibility,
         title: tracks.title,
@@ -57,25 +61,58 @@ export async function GET(
         album: tracks.album,
         duration: tracks.duration,
         fileSize: tracks.fileSize,
-        orderIndex: playlistTracks.orderIndex,
-        addedAt: playlistTracks.addedAt,
       })
       .from(playlistTracks)
-      .innerJoin(tracks, eq(playlistTracks.trackId, tracks.id))
-      .where(and(
-        eq(playlistTracks.playlistId, id),
-        canViewPrivateTracks
-          ? undefined
-          : or(eq(tracks.visibility, 'public'), eq(tracks.userId, session.userId))
-      ))
+      .leftJoin(tracks, eq(playlistTracks.trackId, tracks.id))
+      .where(eq(playlistTracks.playlistId, id))
       .orderBy(asc(playlistTracks.orderIndex));
+
+    const resolvedTracks = playlistTrackRows
+      .map((row) => {
+        if (row.vaultId) {
+          if (
+            !canViewPrivateTracks &&
+            row.visibility !== 'public' &&
+            row.userId !== session.userId
+          ) {
+            return null;
+          }
+          return {
+            id: row.vaultId,
+            title: row.title || 'Untitled',
+            artist: row.artist || 'Unknown Artist',
+            album: row.album || undefined,
+            duration: row.duration || 0,
+            fileSize: row.fileSize || 0,
+            visibility: (row.visibility as 'public' | 'private') || 'public',
+            orderIndex: row.orderIndex,
+            addedAt: row.addedAt,
+          };
+        }
+
+        if (row.trackData) {
+          try {
+            const parsed = JSON.parse(row.trackData);
+            return {
+              ...parsed,
+              id: row.ptTrackId,
+              orderIndex: row.orderIndex,
+              addedAt: row.addedAt,
+            };
+          } catch {
+            // fall through
+          }
+        }
+        return null;
+      })
+      .filter((t): t is NonNullable<typeof t> => t !== null);
 
     return NextResponse.json({
       playlist: {
         ...playlist,
         isOwner: playlist.userId === session.userId,
       },
-      tracks: playlistTrackRows.map(({ userId: _userId, visibility: _visibility, ...track }) => track),
+      tracks: resolvedTracks,
     });
   } catch (error) {
     console.error('Fetch playlist detail error:', error);
@@ -98,7 +135,7 @@ export async function POST(
 
     const { id } = await params;
     const body = await req.json();
-    const { trackId } = body;
+    const { trackId, trackData } = body;
 
     if (!trackId) {
       return NextResponse.json({ error: 'Track ID required' }, { status: 400 });
@@ -134,6 +171,7 @@ export async function POST(
       id: crypto.randomUUID(),
       playlistId: id,
       trackId,
+      trackData: trackData ? JSON.stringify(trackData) : null,
       orderIndex: Date.now(),
       addedAt: Date.now(),
     });

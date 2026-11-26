@@ -39,7 +39,8 @@ export const playlists = sqliteTable('playlists', {
 export const playlistTracks = sqliteTable('playlist_tracks', {
   id: text('id').primaryKey(),
   playlistId: text('playlist_id').notNull().references(() => playlists.id, { onDelete: 'cascade' }),
-  trackId: text('track_id').notNull().references(() => tracks.id, { onDelete: 'cascade' }),
+  trackId: text('track_id').notNull(),
+  trackData: text('track_data'), // JSON stringified metadata for online & vault songs
   orderIndex: integer('order_index').notNull().default(0),
   addedAt: integer('added_at').notNull(),
 });

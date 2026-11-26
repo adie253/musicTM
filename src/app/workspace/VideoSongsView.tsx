@@ -36,19 +36,30 @@ interface VideoResult {
 }
 
 const PRESET_CHIPS = [
-  { label: '🔥 Trending', query: 'Trending Videos 2024' },
-  { label: '🎵 Music Videos', query: 'Official Music Video 2024' },
-  { label: '🎬 Bollywood', query: 'Bollywood Songs 2024 Official Video' },
-  { label: '🎤 Arijit Singh', query: 'Arijit Singh Official Video Songs' },
-  { label: '🎸 English Pop', query: 'English Pop Music Video 2024' },
-  { label: '😂 Comedy', query: 'Funny Videos 2024' },
-  { label: '🏏 Sports', query: 'Sports Highlights 2024' },
-  { label: '🎮 Gaming', query: 'Gaming Videos 2024' },
-  { label: '🌍 Vlogs', query: 'Travel Vlog 2024' },
-  { label: '📚 Education', query: 'Educational Videos 2024' },
-  { label: '🎵 Diljit Dosanjh', query: 'Diljit Dosanjh Punjabi Video Songs Official' },
-  { label: '🎵 AP Dhillon', query: 'AP Dhillon Official Music Video' },
+  { label: 'Trending', query: 'Trending Videos 2024' },
+  { label: 'Music Videos', query: 'Official Music Video 2024' },
+  { label: 'Bollywood', query: 'Bollywood Songs 2024 Official Video' },
+  { label: 'Arijit Singh', query: 'Arijit Singh Official Video Songs' },
+  { label: 'English Pop', query: 'English Pop Music Video 2024' },
+  { label: 'Comedy', query: 'Funny Videos 2024' },
+  { label: 'Sports', query: 'Sports Highlights 2024' },
+  { label: 'Gaming', query: 'Gaming Videos 2024' },
+  { label: 'Vlogs', query: 'Travel Vlog 2024' },
+  { label: 'Education', query: 'Educational Videos 2024' },
+  { label: 'Diljit Dosanjh', query: 'Diljit Dosanjh Punjabi Video Songs Official' },
+  { label: 'AP Dhillon', query: 'AP Dhillon Official Music Video' },
 ];
+
+function buildSimilarQuery(video: VideoResult): string {
+  const cleanedTitle = video.title
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+    .replace(/\|.*$/, ' ')
+    .replace(/official\s*(music\s*)?video|full\s*song|hd|4k|lyrics/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const base = cleanedTitle.split(/\s+/).slice(0, 5).join(' ');
+  return `${base} ${video.channelTitle}`.trim() || video.title;
+}
 
 /** Parse ISO 8601 duration to mm:ss */
 function parseIsoDuration(iso: string): string {
@@ -64,21 +75,26 @@ function parseIsoDuration(iso: string): string {
 
 export default function VideoSongsView() {
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeQuery, setActiveQuery] = useState(PRESET_CHIPS[0].query);
   const [activeChip, setActiveChip] = useState(PRESET_CHIPS[0].label);
   const [videos, setVideos] = useState<VideoResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeVideo, setActiveVideo] = useState<VideoResult | null>(null);
+  const [similarVideos, setSimilarVideos] = useState<VideoResult[]>([]);
+  const [loadingSimilar, setLoadingSimilar] = useState(false);
   const [iframeError, setIframeError] = useState(false);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [noApiKey, setNoApiKey] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const reqIdRef = useRef(0);
+  const similarReqIdRef = useRef(0);
 
-  async function fetchVideos(query: string, pageToken?: string) {
-    const params = new URLSearchParams({ q: query, maxResults: '20' });
+  async function fetchVideos(query: string, pageToken?: string, maxResults = 20) {
+    const params = new URLSearchParams({ q: query, maxResults: String(maxResults) });
     if (pageToken) params.set('pageToken', pageToken);
 
     const res = await fetch(`/api/youtube/search?${params}`);
@@ -94,49 +110,98 @@ export default function VideoSongsView() {
     return data;
   }
 
+  async function loadSimilarVideos(video: VideoResult) {
+    const reqId = ++similarReqIdRef.current;
+    setLoadingSimilar(true);
+    setSimilarVideos([]);
+    try {
+      const q = buildSimilarQuery(video);
+      const data = await fetchVideos(q, undefined, 12);
+      if (similarReqIdRef.current !== reqId) return;
+      const filtered = (data.results || []).filter((v: VideoResult) => v.id !== video.id);
+      setSimilarVideos(filtered.slice(0, 8));
+    } catch (e) {
+      if (similarReqIdRef.current === reqId) {
+        console.error('Failed to load similar videos:', e);
+      }
+    } finally {
+      if (similarReqIdRef.current === reqId) {
+        setLoadingSimilar(false);
+      }
+    }
+  }
+
+  function selectVideo(video: VideoResult) {
+    setActiveVideo(video);
+    setIframeError(false);
+    loadSimilarVideos(video);
+  }
+
   async function loadChip(chip: typeof PRESET_CHIPS[0]) {
+    const reqId = ++reqIdRef.current;
     setActiveChip(chip.label);
+    setActiveQuery(chip.query);
     setSearchQuery('');
     setLoading(true);
+    setSearching(false);
     setError(null);
     setNextPageToken(null);
     setActiveVideo(null);
+    setSimilarVideos([]);
     setIframeError(false);
     try {
       const data = await fetchVideos(chip.query);
+      if (reqIdRef.current !== reqId) return;
       setVideos(data.results || []);
       setNextPageToken(data.nextPageToken || null);
     } catch (e: any) {
-      setError(e.message);
+      if (reqIdRef.current === reqId) {
+        setError(e.message);
+      }
     } finally {
-      setLoading(false);
+      if (reqIdRef.current === reqId) {
+        setLoading(false);
+      }
     }
   }
 
   async function handleSearch(q: string) {
-    if (!q.trim()) return;
+    const trimmed = q.trim();
+    if (!trimmed) return;
+    const reqId = ++reqIdRef.current;
     setSearching(true);
+    setLoading(true);
     setError(null);
     setActiveChip('');
+    setActiveQuery(trimmed);
     setNextPageToken(null);
     try {
-      const data = await fetchVideos(q.trim());
+      const data = await fetchVideos(trimmed);
+      if (reqIdRef.current !== reqId) return;
       setVideos(data.results || []);
       setNextPageToken(data.nextPageToken || null);
     } catch (e: any) {
-      setError(e.message);
+      if (reqIdRef.current === reqId) {
+        setError(e.message);
+      }
     } finally {
-      setSearching(false);
+      if (reqIdRef.current === reqId) {
+        setSearching(false);
+        setLoading(false);
+      }
     }
   }
 
   async function loadMore() {
-    if (!nextPageToken || loadingMore) return;
+    if (!nextPageToken || loadingMore || !activeQuery) return;
     setLoadingMore(true);
     try {
-      const query = searchQuery.trim() || PRESET_CHIPS.find(c => c.label === activeChip)?.query || '';
-      const data = await fetchVideos(query, nextPageToken);
-      setVideos(prev => [...prev, ...(data.results || [])]);
+      const data = await fetchVideos(activeQuery, nextPageToken);
+      setVideos(prev => {
+        const seen = new Set(prev.map(v => v.id));
+        const fresh = (data.results || []).filter((v: VideoResult) => !seen.has(v.id));
+        return [...prev, ...fresh];
+      });
       setNextPageToken(data.nextPageToken || null);
     } catch (e: any) {
       console.error(e);
@@ -182,7 +247,7 @@ export default function VideoSongsView() {
             <Film size={12} /> YouTube
           </div>
           <h1 style={{ fontSize: 'clamp(1.6rem, 3vw, 2.2rem)', fontWeight: 800, color: '#fff', marginBottom: '0.4rem' }}>
-            📺 YouTube
+            YouTube
           </h1>
           <p style={{ color: 'rgba(255,255,255,0.65)', fontSize: '0.9rem', marginBottom: '1.5rem', maxWidth: 480 }}>
             Stream any video from YouTube — music, sports, vlogs, comedy &amp; more. Securely embedded.
@@ -296,7 +361,7 @@ export default function VideoSongsView() {
                 position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
                 alignItems: 'center', justifyContent: 'center', gap: '1rem', padding: '2rem',
               }}>
-                <div style={{ fontSize: '2.5rem' }}>🚫</div>
+                <AlertCircle size={36} color="#ff453a" />
                 <div style={{ color: '#fff', fontWeight: 700, fontSize: '1rem', textAlign: 'center' }}>Embedding disabled for this video</div>
                 <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '0.82rem', textAlign: 'center', maxWidth: 320 }}>
                   The uploader has restricted embedding. Watch it directly on YouTube.
@@ -346,13 +411,43 @@ export default function VideoSongsView() {
                 <ExternalLink size={13} /> YouTube
               </a>
               <button
-                onClick={() => { setActiveVideo(null); setIframeError(false); }}
+                onClick={() => { setActiveVideo(null); setSimilarVideos([]); setIframeError(false); }}
                 style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', padding: '0.4rem 0.8rem', color: 'rgba(255,255,255,0.7)', fontSize: '0.78rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
               >
                 <X size={13} /> Close
               </button>
             </div>
           </div>
+
+          {/* Similar Video Suggestions */}
+          {(loadingSimilar || similarVideos.length > 0) && (
+            <div style={{ padding: '1rem 1.25rem', borderTop: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.02)' }}>
+              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'rgba(255,255,255,0.65)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.75rem' }}>
+                Similar Videos
+              </div>
+              {loadingSimilar ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'rgba(255,255,255,0.5)', fontSize: '0.82rem', padding: '0.5rem 0' }}>
+                  <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                  <span>Loading suggestions...</span>
+                </div>
+              ) : (
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                  gap: '0.75rem',
+                }}>
+                  {similarVideos.map(v => (
+                    <VideoCard
+                      key={`sim_${v.id}`}
+                      video={v}
+                      isActive={activeVideo.id === v.id}
+                      onPlay={() => selectVideo(v)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -380,7 +475,7 @@ export default function VideoSongsView() {
                 key={video.id}
                 video={video}
                 isActive={activeVideo?.id === video.id}
-                onPlay={() => setActiveVideo(video)}
+                onPlay={() => selectVideo(video)}
               />
             ))}
           </div>
@@ -481,7 +576,7 @@ function VideoCard({
             fontSize: '0.65rem', fontWeight: 700, padding: '2px 8px', borderRadius: '999px',
             textTransform: 'uppercase', letterSpacing: '0.05em',
           }}>
-            ▶ Playing
+            Playing
           </div>
         )}
       </div>
