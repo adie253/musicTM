@@ -538,8 +538,30 @@ export default function WorkspacePage() {
     const container = lyricsScrollRef.current;
     const el = activeLyricRef.current;
     if (!container || !el) return;
-    const targetTop = el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2;
-    container.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+
+    const targetTop = Math.max(0, el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2);
+    const startTop = container.scrollTop;
+    const distance = targetTop - startTop;
+    if (Math.abs(distance) < 2) return;
+
+    const duration = 520;
+    let startTime: number | null = null;
+    let rafId = 0;
+
+    const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+
+    const step = (now: number) => {
+      if (startTime === null) startTime = now;
+      const elapsed = now - startTime;
+      const progress = Math.min(1, elapsed / duration);
+      container.scrollTop = startTop + distance * easeOutCubic(progress);
+      if (progress < 1) {
+        rafId = requestAnimationFrame(step);
+      }
+    };
+
+    rafId = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(rafId);
   }, [activeLyricIndex, showLyrics]);
 
   async function handleLogout() {
@@ -4973,13 +4995,13 @@ export default function WorkspacePage() {
             borderLeft: '1px solid rgba(255,255,255,0.08)',
             background: 'rgba(0,0,0,0.22)',
             backdropFilter: 'blur(20px)',
-            animation: 'fadeIn 0.3s ease',
+            animation: 'lyricsPanelIn 0.4s cubic-bezier(0.22, 1, 0.36, 1)',
           }}
         >
           <style>{`
             .lyrics-scroll { scrollbar-width: none; -ms-overflow-style: none; }
             .lyrics-scroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
-            @keyframes lyricsLineIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+            @keyframes lyricsPanelIn { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: translateX(0); } }
           `}</style>
 
           {/* Centered Lyrics Container */}
@@ -5001,17 +5023,33 @@ export default function WorkspacePage() {
             </div>
 
             {/* Lyrics Content */}
-            <div ref={lyricsScrollRef} className="lyrics-scroll" style={{ position: 'relative', flex: 1, minHeight: 0, overflowY: 'auto', scrollbarWidth: 'none', msOverflowStyle: 'none', paddingRight: '0.25rem' }}>
+            <div
+              ref={lyricsScrollRef}
+              className="lyrics-scroll"
+              style={{
+                position: 'relative',
+                flex: 1,
+                minHeight: 0,
+                overflowY: 'auto',
+                scrollbarWidth: 'none',
+                msOverflowStyle: 'none',
+                paddingRight: '0.5rem',
+                maskImage: 'linear-gradient(to bottom, transparent 0%, black 12%, black 86%, transparent 100%)',
+                WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 12%, black 86%, transparent 100%)',
+              }}
+            >
               {lyricsLoading ? (
                 <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', color: 'rgba(255,255,255,0.6)' }}>
                   <Loader2 size={24} className="animate-spin" />
                   <div style={{ fontSize: '0.85rem' }}>Loading lyrics...</div>
                 </div>
               ) : syncedLyrics && syncedLyrics.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem', paddingTop: '20%', paddingBottom: '35%' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.15rem', paddingTop: '24%', paddingBottom: '40%' }}>
                   {syncedLyrics.map((line, i) => {
                     const isActiveLine = i === activeLyricIndex;
                     const isPast = i < activeLyricIndex;
+                    const distance = activeLyricIndex >= 0 ? Math.abs(i - activeLyricIndex) : 0;
+                    const blurPx = isActiveLine ? 0 : Math.min(1.5, distance * 0.35);
                     return (
                       <div
                         key={`${line.time}-${i}`}
@@ -5023,16 +5061,17 @@ export default function WorkspacePage() {
                           }
                         }}
                         style={{
-                          fontSize: isActiveLine ? '1.45rem' : '1.15rem',
-                          fontWeight: isActiveLine ? 700 : 600,
+                          fontSize: '1.3rem',
+                          fontWeight: 700,
                           lineHeight: 1.45,
                           cursor: 'pointer',
-                          color: isActiveLine
-                            ? '#ffffff'
-                            : isPast
-                            ? 'rgba(255,255,255,0.3)'
-                            : 'rgba(255,255,255,0.5)',
-                          transition: 'all 0.25s ease',
+                          transformOrigin: 'left center',
+                          transform: isActiveLine ? 'scale(1.06) translate3d(0, 0, 0)' : 'scale(0.96) translate3d(0, 0, 0)',
+                          opacity: isActiveLine ? 1 : isPast ? 0.3 : Math.max(0.32, 0.62 - distance * 0.06),
+                          filter: blurPx > 0 ? `blur(${blurPx}px)` : 'none',
+                          color: '#ffffff',
+                          transition: 'transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.45s cubic-bezier(0.22, 1, 0.36, 1), filter 0.45s ease',
+                          willChange: 'transform, opacity',
                         }}
                       >
                         {line.text}
@@ -5203,7 +5242,7 @@ export default function WorkspacePage() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 80,
+          zIndex: 10050,
           padding: '1.25rem',
         }}>
           <div className="apple-glass" style={{ width: '100%', maxWidth: '400px', padding: '2rem' }}>
@@ -5309,7 +5348,7 @@ export default function WorkspacePage() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 80,
+          zIndex: 10055,
           padding: '1.25rem',
         }}>
           <div className="apple-glass" style={{ width: '100%', maxWidth: '380px', padding: '1.75rem' }}>
@@ -5366,7 +5405,7 @@ export default function WorkspacePage() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            zIndex: 95,
+            zIndex: 10060,
             padding: '1.25rem',
             animation: 'fadeIn 0.15s ease',
           }}
@@ -5558,7 +5597,7 @@ export default function WorkspacePage() {
           backdropFilter: 'blur(20px)',
           borderRadius: '999px',
           padding: '0.6rem 1.4rem',
-          zIndex: 110,
+          zIndex: 10080,
           display: 'flex',
           alignItems: 'center',
           gap: '0.5rem',
