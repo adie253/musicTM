@@ -2,13 +2,15 @@ import bcrypt from 'bcryptjs';
 import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
 
-const configuredJwtSecret = process.env.JWT_SECRET;
-if (process.env.NODE_ENV === 'production' && !configuredJwtSecret) {
-  throw new Error('JWT_SECRET must be configured in production.');
+function getJwtSecret(): Uint8Array {
+  const configuredJwtSecret = process.env.JWT_SECRET;
+  if (process.env.NODE_ENV === 'production' && !configuredJwtSecret) {
+    throw new Error('JWT_SECRET must be configured in production.');
+  }
+  return new TextEncoder().encode(
+    configuredJwtSecret || 'local-development-only-secret-do-not-use-in-production'
+  );
 }
-const JWT_SECRET = new TextEncoder().encode(
-  configuredJwtSecret || 'local-development-only-secret-do-not-use-in-production'
-);
 
 export const COOKIE_NAME = 'vault_session';
 
@@ -38,12 +40,12 @@ export async function createSessionToken(user: SessionUser): Promise<string> {
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime('7d')
-    .sign(JWT_SECRET);
+    .sign(getJwtSecret());
 }
 
 export async function verifySessionToken(token: string): Promise<SessionUser | null> {
   try {
-    const { payload } = await jwtVerify(token, JWT_SECRET);
+    const { payload } = await jwtVerify(token, getJwtSecret());
     if (!payload.sub) return null;
     return {
       userId: payload.sub as string,
