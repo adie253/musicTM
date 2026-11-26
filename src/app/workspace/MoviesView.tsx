@@ -48,9 +48,9 @@ const GENRE_MAP: Record<number, string> = {
 };
 
 const MODE_TABS = [
-  { id: 'trending', label: '🔥 Trending', icon: TrendingUp },
-  { id: 'bollywood', label: '🇮🇳 Bollywood', icon: Film },
-  { id: 'search', label: '🔍 Search', icon: Search },
+  { id: 'trending', label: 'Trending', icon: TrendingUp },
+  { id: 'bollywood', label: 'Bollywood', icon: Film },
+  { id: 'search', label: 'Search', icon: Search },
 ];
 
 export default function MoviesView() {
@@ -186,7 +186,7 @@ export default function MoviesView() {
             <Clapperboard size={12} /> Movies
           </div>
           <h1 style={{ fontSize: 'clamp(1.6rem, 3vw, 2.2rem)', fontWeight: 800, color: '#fff', marginBottom: '0.4rem' }}>
-            🎬 Movies & Trailers
+            Movies & Trailers
           </h1>
           <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.9rem', maxWidth: 480 }}>
             Discover trending films, Bollywood blockbusters, and watch official trailers.
@@ -490,7 +490,7 @@ function MovieCard({ movie, isSelected, onClick }: { movie: Movie; isSelected: b
         )}
         {isSelected && (
           <div style={{ position: 'absolute', top: '0.45rem', left: '0.45rem', background: 'var(--apple-pink, #fa243c)', borderRadius: '999px', padding: '2px 8px', fontSize: '0.62rem', fontWeight: 700, color: '#fff', textTransform: 'uppercase' }}>
-            ▶ Open
+            Open
           </div>
         )}
       </div>

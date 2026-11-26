@@ -118,6 +118,25 @@ function getTrackGradient(id: string) {
   return ARTWORK_GRADIENTS[index];
 }
 
+function parseLrc(lrc: string): Array<{ time: number; text: string }> {
+  const lines: Array<{ time: number; text: string }> = [];
+  const regex = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]/g;
+  for (const rawLine of lrc.split(/\r?\n/)) {
+    const text = rawLine.replace(regex, '').trim();
+    let match: RegExpExecArray | null;
+    regex.lastIndex = 0;
+    while ((match = regex.exec(rawLine)) !== null) {
+      const mins = parseInt(match[1], 10);
+      const secs = parseInt(match[2], 10);
+      const msRaw = match[3] || '0';
+      const ms = parseInt(msRaw.padEnd(3, '0').slice(0, 3), 10);
+      const time = mins * 60 + secs + ms / 1000;
+      lines.push({ time, text: text || '...' });
+    }
+  }
+  return lines.sort((a, b) => a.time - b.time);
+}
+
 export default function WorkspacePage() {
   const router = useRouter();
   const [user, setUser] = useState<{ id: string; username: string; email: string; displayName?: string } | null>(null);
@@ -149,8 +168,13 @@ export default function WorkspacePage() {
   const [isExpandedPlayer, setIsExpandedPlayer] = useState(false);
   const [isFavorited, setIsFavorited] = useState(false);
   const [showLyrics, setShowLyrics] = useState(false);
-  const [lyrics, setLyrics] = useState<string | null>(null);
+  const [syncedLyrics, setSyncedLyrics] = useState<Array<{ time: number; text: string }> | null>(null);
+  const [plainLyrics, setPlainLyrics] = useState<string | null>(null);
   const [lyricsLoading, setLyricsLoading] = useState(false);
+  const [lyricsTrackId, setLyricsTrackId] = useState<string | null>(null);
+  const [exploreExternalSearch, setExploreExternalSearch] = useState<{ query: string; nonce: number } | null>(null);
+  const activeLyricRef = useRef<HTMLDivElement | null>(null);
+  const lyricsScrollRef = useRef<HTMLDivElement | null>(null);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -447,6 +471,76 @@ export default function WorkspacePage() {
       setIsFavorited(favoriteIds.has(currentTrack.id));
     }
   }, [currentTrack, favoriteIds]);
+
+  // Fetch lyrics when lyrics panel is open for currentTrack
+  useEffect(() => {
+    if (!showLyrics || !currentTrack) return;
+    if (lyricsTrackId === currentTrack.id) return;
+
+    let cancelled = false;
+    setLyricsLoading(true);
+    setSyncedLyrics(null);
+    setPlainLyrics(null);
+
+    const params = new URLSearchParams({
+      title: currentTrack.title,
+      artist: currentTrack.artist || '',
+      album: currentTrack.album || '',
+      duration: String(Math.round(currentTrack.duration || 0)),
+      id: currentTrack.id,
+    });
+
+    fetch(`/api/lyrics?${params.toString()}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return;
+        setLyricsTrackId(currentTrack.id);
+        if (data.syncedLyrics) {
+          const parsed = parseLrc(data.syncedLyrics);
+          setSyncedLyrics(parsed.length > 0 ? parsed : null);
+        }
+        if (data.plainLyrics) {
+          setPlainLyrics(data.plainLyrics);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) console.error('Failed to fetch lyrics:', err);
+      })
+      .finally(() => {
+        if (!cancelled) setLyricsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showLyrics, currentTrack?.id]);
+
+  // Lock background page scroll while fullscreen player is open
+  useEffect(() => {
+    if (!isExpandedPlayer) return;
+    const prevBodyOverflow = document.body.style.overflow;
+    const prevHtmlOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevBodyOverflow;
+      document.documentElement.style.overflow = prevHtmlOverflow;
+    };
+  }, [isExpandedPlayer]);
+
+  // Auto-scroll active synced lyric line inside the lyrics container only
+  const activeLyricIndex = syncedLyrics
+    ? syncedLyrics.reduce((acc, line, idx) => (line.time <= currentTime + 0.3 ? idx : acc), -1)
+    : -1;
+
+  useEffect(() => {
+    if (!showLyrics || activeLyricIndex < 0) return;
+    const container = lyricsScrollRef.current;
+    const el = activeLyricRef.current;
+    if (!container || !el) return;
+    const targetTop = el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2;
+    container.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+  }, [activeLyricIndex, showLyrics]);
 
   async function handleLogout() {
     await fetch('/api/auth/logout', { method: 'POST' });
@@ -834,9 +928,14 @@ export default function WorkspacePage() {
         setNewPlaylistDesc('');
         setShowNewPlaylistModal(false);
         await loadPlaylists();
+        showToast('Playlist created');
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to create playlist');
       }
     } catch (err) {
       console.error('Create playlist error:', err);
+      showToast('Failed to create playlist');
     } finally {
       setCreatingPlaylist(false);
     }
@@ -922,7 +1021,22 @@ export default function WorkspacePage() {
       const res = await fetch(`/api/playlists/${playlistId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trackId: trackToAddToPlaylist.id }),
+        body: JSON.stringify({
+          trackId: trackToAddToPlaylist.id,
+          trackData: {
+            id: trackToAddToPlaylist.id,
+            title: trackToAddToPlaylist.title,
+            artist: trackToAddToPlaylist.artist,
+            album: trackToAddToPlaylist.album,
+            duration: trackToAddToPlaylist.duration,
+            fileSize: trackToAddToPlaylist.fileSize,
+            fileName: trackToAddToPlaylist.fileName,
+            visibility: trackToAddToPlaylist.visibility,
+            streamUrl: trackToAddToPlaylist.streamUrl,
+            imageUrl: trackToAddToPlaylist.imageUrl,
+            isOnlineStream: trackToAddToPlaylist.isOnlineStream,
+          },
+        }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -935,7 +1049,8 @@ export default function WorkspacePage() {
           handleViewPlaylist(selectedPlaylist);
         }
       } else {
-        showToast('Failed to add track to playlist');
+        const errData = await res.json().catch(() => ({}));
+        showToast(errData.error || 'Failed to add track to playlist');
         setTrackToAddToPlaylist(null);
       }
     } catch (err) {
@@ -944,6 +1059,25 @@ export default function WorkspacePage() {
       setTrackToAddToPlaylist(null);
     } finally {
       setAddingToPlaylistId(null);
+    }
+  }
+
+  async function handleRemoveTrackFromPlaylist(playlistId: string, trackId: string) {
+    try {
+      const res = await fetch(
+        `/api/playlists/${playlistId}?trackId=${encodeURIComponent(trackId)}`,
+        { method: 'DELETE' }
+      );
+      if (res.ok) {
+        setPlaylistTracks((prev) => prev.filter((t) => t.id !== trackId));
+        await loadPlaylists();
+        showToast('Removed from playlist');
+      } else {
+        showToast('Failed to remove track');
+      }
+    } catch (err) {
+      console.error('Remove track from playlist error:', err);
+      showToast('Error removing track');
     }
   }
 
@@ -1096,20 +1230,21 @@ export default function WorkspacePage() {
                 setSelectedUserFilter(null);
               }}
               title="Clear search"
-              style={{
-                position: 'absolute',
-                right: '0.75rem',
-                top: '50%',
-                transform: 'translateY(-50%)',
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-tertiary)',
-                cursor: 'pointer',
-                fontSize: '0.8rem',
-              }}
-            >
-              ✕
-            </button>
+                style={{
+                  position: 'absolute',
+                  right: '0.75rem',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-tertiary)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                <X size={14} />
+              </button>
           )}
         </div>
 
@@ -1120,7 +1255,7 @@ export default function WorkspacePage() {
           </div>
           <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '1.5rem' }}>
             <button
-              onClick={() => setActiveTab('listen')}
+              onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('listen'); }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -1141,7 +1276,7 @@ export default function WorkspacePage() {
             </button>
 
             <button
-              onClick={() => setActiveTab('explore')}
+              onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('explore'); }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -1162,7 +1297,7 @@ export default function WorkspacePage() {
             </button>
 
             <button
-              onClick={() => setActiveTab('videos')}
+              onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('videos'); }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -1183,7 +1318,7 @@ export default function WorkspacePage() {
             </button>
 
             <button
-              onClick={() => setActiveTab('movies')}
+              onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('movies'); }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -1204,7 +1339,7 @@ export default function WorkspacePage() {
             </button>
 
             <button
-              onClick={() => setActiveTab('tracks')}
+              onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('tracks'); }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -1225,7 +1360,7 @@ export default function WorkspacePage() {
             </button>
 
             <button
-              onClick={() => setActiveTab('playlists')}
+              onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('playlists'); }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -1246,7 +1381,7 @@ export default function WorkspacePage() {
             </button>
 
             <button
-              onClick={() => setActiveTab('favorites')}
+              onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('favorites'); }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -1267,7 +1402,7 @@ export default function WorkspacePage() {
             </button>
 
             <button
-              onClick={() => setActiveTab('upload')}
+              onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('upload'); }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -1288,7 +1423,7 @@ export default function WorkspacePage() {
             </button>
 
             <button
-              onClick={() => setActiveTab('profile')}
+              onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('profile'); }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -1326,6 +1461,8 @@ export default function WorkspacePage() {
               <button
                 key={pl.id}
                 onClick={() => {
+                  setSearchQuery('');
+                  setSelectedUserFilter(null);
                   handleViewPlaylist(pl);
                   setActiveTab('playlists');
                 }}
@@ -1517,10 +1654,11 @@ export default function WorkspacePage() {
                   border: 'none',
                   color: 'var(--text-tertiary)',
                   cursor: 'pointer',
-                  fontSize: '0.8rem',
+                  display: 'flex',
+                  alignItems: 'center',
                 }}
               >
-                ✕
+                <X size={14} />
               </button>
             )}
           </div>
@@ -1545,9 +1683,9 @@ export default function WorkspacePage() {
             </div>
             <button
               onClick={() => setPlaybackError(null)}
-              style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer', fontSize: '0.8rem' }}
+              style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
             >
-              ✕
+              <X size={14} />
             </button>
           </div>
         )}
@@ -1580,6 +1718,10 @@ export default function WorkspacePage() {
                   {searchQuery.trim().length > 0 && (
                     <button
                       onClick={() => {
+                        const q = searchQuery.trim();
+                        setExploreExternalSearch({ query: q, nonce: Date.now() });
+                        setSearchQuery('');
+                        setSelectedUserFilter(null);
                         setActiveTab('explore');
                       }}
                       className="btn-apple-primary"
@@ -1598,7 +1740,8 @@ export default function WorkspacePage() {
                     className="btn-apple-secondary"
                     style={{ fontSize: '0.8125rem' }}
                   >
-                    ✕ Clear Search
+                    <X size={13} />
+                    <span>Clear Search</span>
                   </button>
                 </div>
               </div>
@@ -1809,6 +1952,7 @@ export default function WorkspacePage() {
                   favoriteIds={favoriteIds}
                   onToggleFavorite={toggleFavorite}
                   onStartRadio={handleStartRadio}
+                  externalSearch={exploreExternalSearch}
                 />
               )}
 
@@ -2654,20 +2798,27 @@ export default function WorkspacePage() {
                             onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
                             onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
                           >
-                            <span style={{ fontSize: '0.8rem', color: isActive ? 'var(--apple-pink)' : 'var(--text-tertiary)', minWidth: '1.5rem', textAlign: 'center', fontWeight: 600 }}>
-                              {isActive && isPlaying ? '▶' : idx + 1}
+                            <span style={{ fontSize: '0.8rem', color: isActive ? 'var(--apple-pink)' : 'var(--text-tertiary)', minWidth: '1.5rem', textAlign: 'center', fontWeight: 600, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                              {isActive && isPlaying ? <Play size={11} fill="currentColor" /> : idx + 1}
                             </span>
                             <div style={{
                               width: '2.5rem',
                               height: '2.5rem',
                               borderRadius: '0.5rem',
-                              background: getTrackGradient(pt.id),
+                              background: pt.imageUrl ? 'none' : getTrackGradient(pt.id),
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'center',
                               flexShrink: 0,
+                              overflow: 'hidden',
                             }}>
-                              {isActive && isBuffering ? (
+                              {pt.imageUrl ? (
+                                <img
+                                  src={`/api/jiosaavn/image?url=${encodeURIComponent(pt.imageUrl)}`}
+                                  alt={pt.title}
+                                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                />
+                              ) : isActive && isBuffering ? (
                                 <Loader2 size={14} className="animate-spin" color="#ffffff" />
                               ) : isActive && isPlaying ? (
                                 <Pause size={14} fill="#ffffff" color="#ffffff" />
@@ -2686,6 +2837,29 @@ export default function WorkspacePage() {
                             <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', flexShrink: 0 }}>
                               {formatTime(pt.duration)}
                             </span>
+
+                            {selectedPlaylist.isOwner && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRemoveTrackFromPlaylist(selectedPlaylist.id, pt.id);
+                                }}
+                                title="Remove from Playlist"
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: 'var(--text-tertiary)',
+                                  padding: '0.35rem',
+                                  borderRadius: '50%',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                }}
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            )}
 
                             <button
                               onClick={(e) => {
@@ -4293,9 +4467,12 @@ export default function WorkspacePage() {
   {/* MACOS APPLE MUSIC FULLSCREEN PLAYER — LYRICS ENABLED */}
   {isExpandedPlayer && currentTrack && (
     <div
+      className="fullscreen-player-root"
       style={{
         position: 'fixed',
         inset: 0,
+        height: '100dvh',
+        maxHeight: '100dvh',
         zIndex: 9999,
         backgroundColor: '#000000',
         display: 'flex',
@@ -4307,6 +4484,13 @@ export default function WorkspacePage() {
         overscrollBehavior: 'none',
       }}
     >
+      <style>{`
+        @media (max-width: 768px) {
+          .fullscreen-player-root { flex-direction: column !important; overflow-y: auto !important; }
+          .fullscreen-player-half { width: 100% !important; flex: none !important; min-height: auto !important; }
+          .fullscreen-lyrics-half { width: 100% !important; flex: 1 1 auto !important; border-left: none !important; border-top: 1px solid rgba(255,255,255,0.08) !important; min-height: 50vh !important; }
+        }
+      `}</style>
       {/* ATMOSPHERIC GAUSSIAN BLURRED BACKDROP */}
       <div
         style={{
@@ -4404,28 +4588,38 @@ export default function WorkspacePage() {
 
       {/* LEFT / PLAYER COLUMN */}
       <div
+        className="fullscreen-player-half"
         style={{
           position: 'relative',
           zIndex: 5,
-          flex: showLyrics ? '0 0 400px' : '1',
+          flex: showLyrics ? '1 1 50%' : '1',
+          width: showLyrics ? '50%' : '100%',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          padding: '2rem 1.5rem',
-          transition: 'flex 0.35s ease',
+          padding: '2rem 2.5rem',
+          transition: 'all 0.35s ease',
           overflow: 'hidden',
-          maxWidth: showLyrics ? '400px' : '520px',
-          margin: '0 auto',
         }}
       >
+        <div
+          style={{
+            width: '100%',
+            maxWidth: showLyrics ? '400px' : '480px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
         {/* ALBUM ARTWORK */}
         <div
           style={{
             width: '100%',
-            maxWidth: showLyrics ? 'min(260px, 70vw)' : 'min(380px, 65vw)',
+            maxWidth: showLyrics ? 'min(300px, 65vw)' : 'min(380px, 65vw)',
             aspectRatio: '1 / 1',
-            maxHeight: showLyrics ? '240px' : '40vh',
+            maxHeight: showLyrics ? '320px' : '40vh',
             borderRadius: '14px',
             background: currentTrack.imageUrl ? 'none' : getTrackGradient(currentTrack.id),
             display: 'flex',
@@ -4756,79 +4950,112 @@ export default function WorkspacePage() {
             </button>
           </div>
         </div>
+        </div>
       </div>
 
-      {/* LYRICS PANEL (Apple Music style) */}
+      {/* LYRICS PANEL (Apple Music 50/50 split) */}
       {showLyrics && (
         <div
+          className="fullscreen-lyrics-half"
           style={{
             position: 'relative',
             zIndex: 5,
-            flex: '1',
+            flex: '1 1 50%',
+            width: '50%',
+            height: '100%',
+            minHeight: 0,
             display: 'flex',
             flexDirection: 'column',
-            padding: '2.5rem 2rem 2rem',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '4rem 2.5rem 2.5rem',
             overflow: 'hidden',
             borderLeft: '1px solid rgba(255,255,255,0.08)',
-            background: 'rgba(0,0,0,0.3)',
+            background: 'rgba(0,0,0,0.22)',
             backdropFilter: 'blur(20px)',
             animation: 'fadeIn 0.3s ease',
           }}
         >
           <style>{`
-            .lyrics-scroll::-webkit-scrollbar { display: none; }
+            .lyrics-scroll { scrollbar-width: none; -ms-overflow-style: none; }
+            .lyrics-scroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
             @keyframes lyricsLineIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
           `}</style>
-          {/* Lyrics Header */}
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '1.5rem', flexShrink: 0 }}>
-            <div>
-              <div style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.4)', marginBottom: '0.25rem' }}>Lyrics</div>
-              <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '260px' }}>{currentTrack.title}</div>
-              <div style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.5)', marginTop: '0.2rem' }}>{currentTrack.artist}</div>
-            </div>
-            <button
-              onClick={() => setShowLyrics(false)}
-              style={{ background: 'rgba(255,255,255,0.08)', border: 'none', borderRadius: '50%', width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', flexShrink: 0 }}
-            >
-              <X size={14} />
-            </button>
-          </div>
 
-          {/* Lyrics Content */}
-          <div className="lyrics-scroll" style={{ flex: 1, overflowY: 'auto', scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
-            {currentTrack.isOnlineStream ? (
-              <div style={{ textAlign: 'center', paddingTop: '2rem' }}>
-                <div style={{ fontSize: '3rem', marginBottom: '1rem', animation: isPlaying ? 'artworkPulse 2s ease-in-out infinite' : 'none' }}>🎵</div>
-                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#fff', marginBottom: '0.5rem' }}>Lyrics Syncing…</div>
-                <div style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.45)', lineHeight: 1.6, maxWidth: '260px', margin: '0 auto' }}>
-                  Real-time lyrics sync coming soon for online streams
-                </div>
-                <div style={{ marginTop: '2.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', opacity: 0.35 }}>
-                  {[70, 55, 80, 45, 65, 75, 50, 85, 60, 40, 70, 55].map((w, i) => (
-                    <div key={i} style={{ height: '1rem', width: `${w}%`, margin: '0 auto', background: 'rgba(255,255,255,0.12)', borderRadius: '999px', backgroundImage: 'linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.11) 37%, rgba(255,255,255,0.04) 63%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s ease-in-out infinite', animationDelay: `${i * 0.1}s` }} />
-                  ))}
-                </div>
+          {/* Centered Lyrics Container */}
+          <div style={{ width: '100%', maxWidth: '520px', height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            {/* Lyrics Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem', flexShrink: 0 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.45)', marginBottom: '0.25rem' }}>Lyrics</div>
+                <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{currentTrack.title}</div>
+                <div style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.55)', marginTop: '0.15rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{currentTrack.artist}</div>
               </div>
-            ) : (
-              <div style={{ textAlign: 'center', paddingTop: '0.5rem' }}>
-                {[
-                  { text: `♪ ${currentTrack.title} ♪`, style: { fontSize: '1.15rem', fontWeight: 800, color: '#fff', marginBottom: '0.5rem' } },
-                  { text: `– ${currentTrack.artist} –`, style: { fontSize: '0.95rem', color: 'var(--apple-pink)', marginBottom: '2rem' } },
-                  { text: 'Lyrics are not available', style: { fontSize: '1rem', fontWeight: 600, color: 'rgba(255,255,255,0.75)', marginBottom: '0.5rem' } },
-                  { text: 'for this track.', style: { fontSize: '1rem', fontWeight: 600, color: 'rgba(255,255,255,0.75)', marginBottom: '2rem' } },
-                  { text: 'Songs from your vault or the community', style: { fontSize: '0.82rem', color: 'rgba(255,255,255,0.4)', lineHeight: 1.7 } },
-                  { text: 'library don\'t have lyrics indexed.', style: { fontSize: '0.82rem', color: 'rgba(255,255,255,0.4)', lineHeight: 1.7, marginBottom: '1.5rem' } },
-                  { text: '─────────────', style: { fontSize: '0.75rem', color: 'rgba(255,255,255,0.12)', margin: '1rem 0' } },
-                  { text: 'Try songs from the Explore tab', style: { fontSize: '0.82rem', color: 'rgba(255,255,255,0.4)', lineHeight: 1.7 } },
-                  { text: 'to get synced lyrics.', style: { fontSize: '0.82rem', color: 'rgba(255,255,255,0.4)', lineHeight: 1.7 } },
-                ].map((item, i) => (
-                  <div key={i} style={{ animation: `lyricsLineIn 0.4s ease ${i * 0.06}s both`, ...item.style }}>{item.text}</div>
-                ))}
-                <div style={{ marginTop: '3rem' }}>
-                  <div style={{ fontSize: '2rem', opacity: 0.2, letterSpacing: '0.5rem' }}>♪ ♫ ♪</div>
+              <button
+                onClick={() => setShowLyrics(false)}
+                title="Hide Lyrics"
+                style={{ background: 'rgba(255,255,255,0.08)', border: 'none', borderRadius: '50%', width: '30px', height: '30px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', flexShrink: 0, marginLeft: '1rem' }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            {/* Lyrics Content */}
+            <div ref={lyricsScrollRef} className="lyrics-scroll" style={{ position: 'relative', flex: 1, minHeight: 0, overflowY: 'auto', scrollbarWidth: 'none', msOverflowStyle: 'none', paddingRight: '0.25rem' }}>
+              {lyricsLoading ? (
+                <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', color: 'rgba(255,255,255,0.6)' }}>
+                  <Loader2 size={24} className="animate-spin" />
+                  <div style={{ fontSize: '0.85rem' }}>Loading lyrics...</div>
                 </div>
-              </div>
-            )}
+              ) : syncedLyrics && syncedLyrics.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem', paddingTop: '20%', paddingBottom: '35%' }}>
+                  {syncedLyrics.map((line, i) => {
+                    const isActiveLine = i === activeLyricIndex;
+                    const isPast = i < activeLyricIndex;
+                    return (
+                      <div
+                        key={`${line.time}-${i}`}
+                        ref={isActiveLine ? activeLyricRef : null}
+                        onClick={() => {
+                          if (audioRef.current) {
+                            audioRef.current.currentTime = line.time;
+                            setCurrentTime(line.time);
+                          }
+                        }}
+                        style={{
+                          fontSize: isActiveLine ? '1.45rem' : '1.15rem',
+                          fontWeight: isActiveLine ? 700 : 600,
+                          lineHeight: 1.45,
+                          cursor: 'pointer',
+                          color: isActiveLine
+                            ? '#ffffff'
+                            : isPast
+                            ? 'rgba(255,255,255,0.3)'
+                            : 'rgba(255,255,255,0.5)',
+                          transition: 'all 0.25s ease',
+                        }}
+                      >
+                        {line.text}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : plainLyrics ? (
+                <div style={{ whiteSpace: 'pre-wrap', fontSize: '1.05rem', fontWeight: 500, lineHeight: 1.85, color: 'rgba(255,255,255,0.85)', paddingBottom: '3rem' }}>
+                  {plainLyrics}
+                </div>
+              ) : (
+                <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
+                  <Music size={32} style={{ color: 'rgba(255,255,255,0.25)', marginBottom: '1rem' }} />
+                  <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'rgba(255,255,255,0.75)', marginBottom: '0.4rem' }}>
+                    No lyrics found
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.4)', lineHeight: 1.6, maxWidth: '240px' }}>
+                    Lyrics are not available for this track.
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -4852,7 +5079,7 @@ export default function WorkspacePage() {
         zIndex: 35,
       }}>
         <button
-          onClick={() => setActiveTab('listen')}
+          onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('listen'); }}
           style={{
             background: 'none',
             border: 'none',
@@ -4871,7 +5098,7 @@ export default function WorkspacePage() {
         </button>
 
         <button
-          onClick={() => setActiveTab('explore')}
+          onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('explore'); }}
           style={{
             background: 'none',
             border: 'none',
@@ -4890,7 +5117,7 @@ export default function WorkspacePage() {
         </button>
 
         <button
-          onClick={() => setActiveTab('tracks')}
+          onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('tracks'); }}
           style={{
             background: 'none',
             border: 'none',
@@ -4909,7 +5136,7 @@ export default function WorkspacePage() {
         </button>
 
         <button
-          onClick={() => setActiveTab('playlists')}
+          onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('playlists'); }}
           style={{
             background: 'none',
             border: 'none',
@@ -4928,7 +5155,7 @@ export default function WorkspacePage() {
         </button>
 
         <button
-          onClick={() => setActiveTab('upload')}
+          onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('upload'); }}
           style={{
             background: 'none',
             border: 'none',
@@ -4947,7 +5174,7 @@ export default function WorkspacePage() {
         </button>
 
         <button
-          onClick={() => setActiveTab('profile')}
+          onClick={() => { setSearchQuery(''); setSelectedUserFilter(null); setActiveTab('profile'); }}
           style={{
             background: 'none',
             border: 'none',

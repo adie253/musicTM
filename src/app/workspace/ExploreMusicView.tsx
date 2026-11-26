@@ -21,6 +21,7 @@ import {
   Folder,
   ArrowRight,
   ChevronDown,
+  X,
 } from 'lucide-react';
 import type { JioSaavnSong } from '@/lib/jiosaavn';
 
@@ -54,10 +55,11 @@ interface ExploreMusicViewProps {
   favoriteIds?: Set<string>;
   onToggleFavorite?: (track: WorkspaceTrack) => void;
   onStartRadio?: (track: WorkspaceTrack) => void;
+  externalSearch?: { query: string; nonce: number } | null;
 }
 
 const PRESET_CHIPS = [
-  { label: '🔥 Trending Hits', query: '' },
+  { label: 'Trending Hits', query: '' },
   { label: 'Bollywood Superhits', query: 'Bollywood Top Hits 2024' },
   { label: 'Punjabi Beats', query: 'Top Punjabi Hits Diljit Karan Aujla' },
   { label: 'Arijit Singh Melodies', query: 'Best of Arijit Singh' },
@@ -79,10 +81,11 @@ export default function ExploreMusicView({
   favoriteIds,
   onToggleFavorite,
   onStartRadio,
+  externalSearch,
 }: ExploreMusicViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeQuery, setActiveQuery] = useState('');
-  const [selectedChip, setSelectedChip] = useState('🔥 Trending Hits');
+  const [selectedChip, setSelectedChip] = useState('Trending Hits');
   const [songs, setSongs] = useState<JioSaavnSong[]>([]);
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
@@ -102,33 +105,59 @@ export default function ExploreMusicView({
   } | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const searchContainerRef = useRef<HTMLDivElement | null>(null);
+  const suppressAutocompleteRef = useRef(false);
+  const autocompleteReqIdRef = useRef(0);
+  const searchReqIdRef = useRef(0);
 
-  // Fetch trending songs initially
+  // Fetch trending songs initially (or run external search if passed on mount)
   useEffect(() => {
-    loadTrending();
+    if (!externalSearch?.query) {
+      loadTrending();
+    }
   }, []);
+
+  // Trigger search when global search redirects here
+  useEffect(() => {
+    if (externalSearch?.query) {
+      suppressAutocompleteRef.current = true;
+      setSearchQuery(externalSearch.query);
+      setSelectedChip('');
+      handleSearch(externalSearch.query);
+    }
+  }, [externalSearch?.nonce]);
 
   // Live autocomplete debouncer
   useEffect(() => {
-    if (!searchQuery || searchQuery.trim().length < 2) {
+    if (suppressAutocompleteRef.current) {
+      suppressAutocompleteRef.current = false;
+      return;
+    }
+
+    const trimmed = searchQuery.trim();
+    if (!trimmed || trimmed.length < 2) {
       setSuggestions(null);
       setShowSuggestions(false);
       return;
     }
 
+    const reqId = ++autocompleteReqIdRef.current;
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(
-          `/api/jiosaavn/autocomplete?q=${encodeURIComponent(searchQuery.trim())}`
+          `/api/jiosaavn/autocomplete?q=${encodeURIComponent(trimmed)}`
         );
+        if (autocompleteReqIdRef.current !== reqId) return;
         if (res.ok) {
           const data = await res.json();
           if (
-            (data.songs?.length || data.artists?.length || data.albums?.length) &&
-            searchQuery.trim().length >= 2
+            autocompleteReqIdRef.current === reqId &&
+            (data.songs?.length || data.artists?.length || data.albums?.length)
           ) {
             setSuggestions(data);
             setShowSuggestions(true);
+          } else if (autocompleteReqIdRef.current === reqId) {
+            setSuggestions(null);
+            setShowSuggestions(false);
           }
         }
       } catch (err) {
@@ -175,15 +204,22 @@ export default function ExploreMusicView({
     }
   }
 
-  async function handleSearch(queryToSearch: string) {
+  async function handleSearch(queryToSearch: string, fromChip = false) {
     setShowSuggestions(false);
+    autocompleteReqIdRef.current++;
     const cleanQuery = queryToSearch.trim();
 
     if (!cleanQuery) {
+      setSelectedChip('Trending Hits');
       loadTrending();
       return;
     }
 
+    if (!fromChip) {
+      setSelectedChip('');
+    }
+
+    const reqId = ++searchReqIdRef.current;
     setSearching(true);
     setError(null);
     setActiveQuery(cleanQuery);
@@ -194,7 +230,9 @@ export default function ExploreMusicView({
       const res = await fetch(
         `/api/jiosaavn/search?q=${encodeURIComponent(cleanQuery)}&page=1&limit=30`
       );
+      if (searchReqIdRef.current !== reqId) return;
       const data = await res.json();
+      if (searchReqIdRef.current !== reqId) return;
       if (data.success && Array.isArray(data.results)) {
         setSongs(data.results);
         setHasMore(data.results.length >= 20);
@@ -203,10 +241,14 @@ export default function ExploreMusicView({
         setHasMore(false);
       }
     } catch (err) {
-      console.error('Search failed:', err);
-      setError('Search failed. Please try again.');
+      if (searchReqIdRef.current === reqId) {
+        console.error('Search failed:', err);
+        setError('Search failed. Please try again.');
+      }
     } finally {
-      setSearching(false);
+      if (searchReqIdRef.current === reqId) {
+        setSearching(false);
+      }
     }
   }
 
@@ -236,12 +278,14 @@ export default function ExploreMusicView({
 
   function handleChipClick(chip: { label: string; query: string }) {
     setSelectedChip(chip.label);
+    suppressAutocompleteRef.current = true;
+    setShowSuggestions(false);
     if (!chip.query) {
       setSearchQuery('');
       loadTrending();
     } else {
       setSearchQuery(chip.query);
-      handleSearch(chip.query);
+      handleSearch(chip.query, true);
     }
   }
 
@@ -519,6 +563,7 @@ export default function ExploreMusicView({
                   setSearchQuery('');
                   setSuggestions(null);
                   setShowSuggestions(false);
+                  setSelectedChip('Trending Hits');
                   loadTrending();
                 }}
                 style={{
@@ -528,10 +573,11 @@ export default function ExploreMusicView({
                   border: 'none',
                   color: 'var(--text-secondary)',
                   cursor: 'pointer',
-                  fontSize: '0.85rem',
+                  display: 'flex',
+                  alignItems: 'center',
                 }}
               >
-                ✕
+                <X size={15} />
               </button>
             )}
 
@@ -564,6 +610,7 @@ export default function ExploreMusicView({
                       <div
                         key={s.id}
                         onClick={() => {
+                          suppressAutocompleteRef.current = true;
                           setSearchQuery(s.title);
                           handleSearch(s.title);
                         }}
@@ -602,6 +649,7 @@ export default function ExploreMusicView({
                       <div
                         key={a.id}
                         onClick={() => {
+                          suppressAutocompleteRef.current = true;
                           setSearchQuery(a.title);
                           handleSearch(a.title);
                         }}

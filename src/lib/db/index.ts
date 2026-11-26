@@ -86,11 +86,40 @@ export async function ensureDbInitialized() {
     CREATE TABLE IF NOT EXISTS playlist_tracks (
       id TEXT PRIMARY KEY,
       playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
-      track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+      track_id TEXT NOT NULL,
+      track_data TEXT,
       order_index INTEGER NOT NULL DEFAULT 0,
       added_at INTEGER NOT NULL
     );
   `);
+
+  // Migrate legacy playlist_tracks that had FK on tracks(id) or lacked track_data
+  try {
+    const schemaRes = await client.execute(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='playlist_tracks'"
+    );
+    const tableSql = String(schemaRes.rows[0]?.sql || '');
+    if (tableSql && (!tableSql.includes('track_data') || /REFERENCES\s+tracks/i.test(tableSql))) {
+      await client.execute(`
+        CREATE TABLE IF NOT EXISTS playlist_tracks_new (
+          id TEXT PRIMARY KEY,
+          playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+          track_id TEXT NOT NULL,
+          track_data TEXT,
+          order_index INTEGER NOT NULL DEFAULT 0,
+          added_at INTEGER NOT NULL
+        );
+      `);
+      await client.execute(`
+        INSERT INTO playlist_tracks_new (id, playlist_id, track_id, order_index, added_at)
+        SELECT id, playlist_id, track_id, order_index, added_at FROM playlist_tracks;
+      `);
+      await client.execute(`DROP TABLE playlist_tracks;`);
+      await client.execute(`ALTER TABLE playlist_tracks_new RENAME TO playlist_tracks;`);
+    }
+  } catch (err) {
+    console.warn('playlist_tracks migration skipped:', err);
+  }
 
   await client.execute(`
     CREATE TABLE IF NOT EXISTS favorites (
