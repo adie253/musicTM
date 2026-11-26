@@ -284,7 +284,7 @@ export default function MoviesView() {
           )}
 
           <div style={{ padding: '1.5rem' }}>
-            <div style={{ display: 'flex', gap: '1.25rem', marginBottom: '1.5rem' }}>
+            <div style={{ display: 'flex', gap: '1.25rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
               {selectedMovie.poster && (
                 <img src={selectedMovie.poster} alt={selectedMovie.title} style={{ width: 100, height: 150, objectFit: 'cover', borderRadius: '10px', flexShrink: 0, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }} />
               )}
